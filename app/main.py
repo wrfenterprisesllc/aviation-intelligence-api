@@ -319,8 +319,6 @@ except ImportError as e:
     fred_credit = None
 
 @app.route('/api/credit-spread/current', methods=['GET'])
-@require_auth
-@monitor_endpoint
 def get_real_credit_spread():
     """Get real credit spread from Federal Reserve (FRED)"""
     start_time = time.time()
@@ -387,8 +385,6 @@ def get_real_credit_spread():
         }), 500
 
 @app.route('/api/week2/combined', methods=['GET'])  
-@require_auth
-@monitor_endpoint
 def get_week2_data():
     """Get combined Week 2 data (credit spreads + enhanced load factors)"""
     start_time = time.time()
