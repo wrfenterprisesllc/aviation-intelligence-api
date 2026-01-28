@@ -1,0 +1,26 @@
+# Aviation Intelligence API - GCP Cloud Run Requirements
+# Optimized for Google Cloud Run deployment
+
+# Core Flask framework
+flask==2.3.3
+flask-cors==4.0.0
+
+# Google Cloud libraries
+google-cloud-logging==3.8.0
+google-cloud-monitoring==2.16.0
+google-cloud-core==2.3.3
+
+# HTTP and web scraping
+requests==2.31.0
+beautifulsoup4==4.12.2
+lxml==4.9.3
+
+# Data processing
+pandas==2.0.3
+numpy==1.24.3
+
+# Production server
+gunicorn==21.2.0
+
+# Utilities
+python-dotenv==1.0.0
