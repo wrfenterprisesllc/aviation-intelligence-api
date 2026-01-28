@@ -25,3 +25,5 @@ This service auto-deploys to Cloud Run when code is pushed to the `main` branch.
 ## Authentication
 
 API key authentication via X-API-Key header.
+# Test change for trigger verification
+Test timestamp: Tue Jan 27 08:07:05 PM EST 2026
