@@ -36,7 +36,7 @@ class DatabaseService:
 
     def save_article(self, article_data: Dict[str, Any]) -> Optional[str]:
         """
-        Save news article to Firestore
+        Save news article to Firestore (skips duplicates)
 
         Args:
             article_data: Dictionary containing article fields
@@ -50,7 +50,7 @@ class DatabaseService:
                 - raw_payload: Dict
 
         Returns:
-            Document ID if successful, None otherwise
+            Document ID if successfully saved, None if duplicate or error
         """
         try:
             # Validate required fields
@@ -59,18 +59,23 @@ class DatabaseService:
                 if field not in article_data:
                     raise ValueError(f"Missing required field: {field}")
 
-            # Add ingestion timestamp
-            article_data['ingested_at'] = datetime.now()
-
             # Use source_url hash as document ID for deduplication
             import hashlib
             doc_id = hashlib.md5(article_data['source_url'].encode()).hexdigest()
 
-            # Save to Firestore
+            # Check if article already exists
             doc_ref = self.db.collection('news_articles').document(doc_id)
+            if doc_ref.get().exists:
+                self.logger.debug(f"Duplicate article skipped: {article_data['title'][:50]}... ({doc_id})")
+                return None
+
+            # Add ingestion timestamp
+            article_data['ingested_at'] = datetime.now()
+
+            # Save to Firestore (only if new)
             doc_ref.set(article_data)
 
-            self.logger.info(f"Saved article: {article_data['title'][:50]}... ({doc_id})")
+            self.logger.info(f"Saved NEW article: {article_data['title'][:50]}... ({doc_id})")
             return doc_id
 
         except Exception as e:
