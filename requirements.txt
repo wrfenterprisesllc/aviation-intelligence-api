@@ -9,6 +9,8 @@ flask-cors==4.0.0
 google-cloud-logging==3.8.0
 google-cloud-monitoring==2.16.0
 google-cloud-core==2.3.3
+google-cloud-firestore==2.13.1
+google-cloud-storage==2.10.0
 
 # HTTP and web scraping
 requests==2.31.0
@@ -24,3 +26,14 @@ gunicorn==21.2.0
 
 # Utilities
 python-dotenv==1.0.0
+python-dateutil>=2.8.2
+cachetools==5.3.2
+tenacity>=8.2.0
+
+# News and AI integrations
+feedparser==6.0.10
+newsapi-python==0.2.7
+google-generativeai>=0.3.2
+
+# Security and rate limiting
+flask-limiter==3.5.0
