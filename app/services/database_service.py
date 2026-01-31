@@ -264,6 +264,210 @@ class DatabaseService:
             self.logger.error(f"Error getting article stats: {e}")
             return {'error': str(e)}
 
+    # ========== TSA PASSENGER DATA ==========
+
+    def save_tsa_data(self, tsa_data: Dict[str, Any]) -> Optional[str]:
+        """
+        Save TSA passenger throughput data to Firestore
+
+        Args:
+            tsa_data: Dictionary containing TSA data fields
+                - date: str (YYYY-MM-DD format)
+                - current_throughput: int
+                - compared_to_2019: float
+                - source: str
+                - data_quality: str
+                - trend_analysis: str
+
+        Returns:
+            Document ID if successfully saved, None if duplicate or error
+        """
+        try:
+            # Validate required fields
+            if 'date' not in tsa_data or 'current_throughput' not in tsa_data:
+                raise ValueError("Missing required fields: date or current_throughput")
+
+            # Use date as document ID for deduplication (only one reading per day)
+            date_str = tsa_data['date']
+            doc_id = date_str.replace('-', '')  # e.g., "20260131"
+
+            # Check if data for this date already exists
+            doc_ref = self.db.collection('tsa_data').document(doc_id)
+            existing_doc = doc_ref.get()
+
+            if existing_doc.exists:
+                # Update existing record only if it's better quality data
+                existing_data = existing_doc.to_dict()
+                existing_quality = existing_data.get('data_quality', 'unknown')
+                new_quality = tsa_data.get('data_quality', 'unknown')
+
+                # Priority: live_scrape > model_fallback > basic_fallback
+                quality_priority = {'live_scrape': 3, 'model_fallback': 2, 'basic_fallback': 1, 'unknown': 0}
+
+                if quality_priority.get(new_quality, 0) <= quality_priority.get(existing_quality, 0):
+                    self.logger.debug(f"TSA data for {date_str} already exists with equal/better quality")
+                    return None
+
+            # Add ingestion timestamp
+            tsa_data['ingested_at'] = datetime.now()
+
+            # Save to Firestore
+            doc_ref.set(tsa_data)
+
+            self.logger.info(f"Saved TSA data: {date_str} - {tsa_data['current_throughput']:,} passengers")
+            return doc_id
+
+        except Exception as e:
+            self.logger.error(f"Error saving TSA data: {e}")
+            return None
+
+    def get_tsa_data(
+        self,
+        start_date: Optional[datetime] = None,
+        end_date: Optional[datetime] = None,
+        limit: int = 30
+    ) -> List[Dict[str, Any]]:
+        """
+        Query TSA passenger data with optional date filters
+
+        Args:
+            start_date: Filter data after this date
+            end_date: Filter data before this date
+            limit: Maximum number of records to return
+
+        Returns:
+            List of TSA data dictionaries
+        """
+        try:
+            query = self.db.collection('tsa_data')
+
+            # Apply date filters
+            if start_date:
+                query = query.where(filter=FieldFilter('date', '>=', start_date.strftime('%Y-%m-%d')))
+            if end_date:
+                query = query.where(filter=FieldFilter('date', '<=', end_date.strftime('%Y-%m-%d')))
+
+            # Order by date (newest first)
+            query = query.order_by('date', direction=firestore.Query.DESCENDING)
+            query = query.limit(limit)
+
+            # Execute query
+            docs = query.stream()
+            tsa_records = []
+            for doc in docs:
+                data = doc.to_dict()
+                data['id'] = doc.id
+
+                # Convert ingested_at timestamp if present
+                if 'ingested_at' in data and hasattr(data['ingested_at'], 'timestamp'):
+                    data['ingested_at'] = data['ingested_at'].replace(tzinfo=None)
+
+                tsa_records.append(data)
+
+            self.logger.info(f"Retrieved {len(tsa_records)} TSA records")
+            return tsa_records
+
+        except Exception as e:
+            self.logger.error(f"Error querying TSA data: {e}")
+            return []
+
+    # ========== FRED ECONOMIC DATA ==========
+
+    def save_fred_data(self, fred_data: Dict[str, Any]) -> Optional[str]:
+        """
+        Save FRED credit spread data to Firestore
+
+        Args:
+            fred_data: Dictionary containing FRED data fields
+                - data_date: str (YYYY-MM-DD format)
+                - credit_spread_bps: int
+                - corporate_yield_pct: float
+                - treasury_yield_pct: float
+                - spread_description: str
+                - risk_level: str
+                - trend: str
+
+        Returns:
+            Document ID if successfully saved, None if duplicate or error
+        """
+        try:
+            # Validate required fields
+            if 'data_date' not in fred_data or 'credit_spread_bps' not in fred_data:
+                raise ValueError("Missing required fields: data_date or credit_spread_bps")
+
+            # Use date as document ID for deduplication
+            date_str = fred_data['data_date']
+            doc_id = date_str.replace('-', '')  # e.g., "20260131"
+
+            # Check if data for this date already exists
+            doc_ref = self.db.collection('fred_data').document(doc_id)
+            if doc_ref.get().exists:
+                self.logger.debug(f"FRED data for {date_str} already exists")
+                return None
+
+            # Add ingestion timestamp
+            fred_data['ingested_at'] = datetime.now()
+
+            # Save to Firestore
+            doc_ref.set(fred_data)
+
+            self.logger.info(f"Saved FRED data: {date_str} - {fred_data['credit_spread_bps']} bps spread")
+            return doc_id
+
+        except Exception as e:
+            self.logger.error(f"Error saving FRED data: {e}")
+            return None
+
+    def get_fred_data(
+        self,
+        start_date: Optional[datetime] = None,
+        end_date: Optional[datetime] = None,
+        limit: int = 30
+    ) -> List[Dict[str, Any]]:
+        """
+        Query FRED credit spread data with optional date filters
+
+        Args:
+            start_date: Filter data after this date
+            end_date: Filter data before this date
+            limit: Maximum number of records to return
+
+        Returns:
+            List of FRED data dictionaries
+        """
+        try:
+            query = self.db.collection('fred_data')
+
+            # Apply date filters
+            if start_date:
+                query = query.where(filter=FieldFilter('data_date', '>=', start_date.strftime('%Y-%m-%d')))
+            if end_date:
+                query = query.where(filter=FieldFilter('data_date', '<=', end_date.strftime('%Y-%m-%d')))
+
+            # Order by date (newest first)
+            query = query.order_by('data_date', direction=firestore.Query.DESCENDING)
+            query = query.limit(limit)
+
+            # Execute query
+            docs = query.stream()
+            fred_records = []
+            for doc in docs:
+                data = doc.to_dict()
+                data['id'] = doc.id
+
+                # Convert ingested_at timestamp if present
+                if 'ingested_at' in data and hasattr(data['ingested_at'], 'timestamp'):
+                    data['ingested_at'] = data['ingested_at'].replace(tzinfo=None)
+
+                fred_records.append(data)
+
+            self.logger.info(f"Retrieved {len(fred_records)} FRED records")
+            return fred_records
+
+        except Exception as e:
+            self.logger.error(f"Error querying FRED data: {e}")
+            return []
+
     # ========== AI INSIGHTS ==========
 
     def save_insight(self, insight_data: Dict[str, Any]) -> Optional[str]:
@@ -337,6 +541,225 @@ class DatabaseService:
             self.logger.error(f"Error fetching insight: {e}")
             return None
 
+    # ========== AIRLINE REPORTS ==========
+
+    def save_airline_report(self, report_data: Dict[str, Any]) -> Optional[str]:
+        """
+        Save airline or industry sector report to Firestore
+
+        Args:
+            report_data: Dictionary containing report fields
+                - report_type: str ('airline' or 'sector')
+                - subject: str (airline name or sector)
+                - generated_at: datetime
+                - period_start: datetime
+                - period_end: datetime
+                - markdown_content: str
+                - html_content: str
+                - sections: Dict[str, str]
+                - metadata: Dict
+                - cached_until: datetime
+
+        Returns:
+            Document ID if successful, None otherwise
+        """
+        try:
+            # Add timestamp if not provided
+            if 'generated_at' not in report_data:
+                report_data['generated_at'] = datetime.now()
+
+            # Save to Firestore (auto-generate ID)
+            doc_ref = self.db.collection('airline_reports').document()
+            doc_ref.set(report_data)
+
+            self.logger.info(f"Saved {report_data.get('report_type')} report for {report_data.get('subject')} ({doc_ref.id})")
+            return doc_ref.id
+
+        except Exception as e:
+            self.logger.error(f"Error saving airline report: {e}")
+            return None
+
+    def get_airline_report(self, report_id: str) -> Optional[Dict[str, Any]]:
+        """
+        Get a specific airline report by ID
+
+        Args:
+            report_id: Document ID of the report
+
+        Returns:
+            Report dictionary or None if not found
+        """
+        try:
+            doc_ref = self.db.collection('airline_reports').document(report_id)
+            doc = doc_ref.get()
+
+            if doc.exists:
+                report_data = doc.to_dict()
+                report_data['id'] = doc.id
+
+                # Convert timestamps
+                for field in ['generated_at', 'period_start', 'period_end', 'cached_until']:
+                    if field in report_data and hasattr(report_data[field], 'timestamp'):
+                        report_data[field] = report_data[field].replace(tzinfo=None)
+
+                return report_data
+            else:
+                self.logger.info(f"Report {report_id} not found")
+                return None
+
+        except Exception as e:
+            self.logger.error(f"Error fetching airline report: {e}")
+            return None
+
+    def get_cached_report(self, subject: str, report_type: str) -> Optional[Dict[str, Any]]:
+        """
+        Get a cached report for a subject if still valid
+
+        Args:
+            subject: Airline name or sector
+            report_type: 'airline' or 'sector'
+
+        Returns:
+            Cached report dictionary or None if not found/expired
+        """
+        try:
+            query = (self.db.collection('airline_reports')
+                    .where(filter=FieldFilter('subject', '==', subject))
+                    .where(filter=FieldFilter('report_type', '==', report_type))
+                    .where(filter=FieldFilter('cached_until', '>', datetime.now()))
+                    .order_by('generated_at', direction=firestore.Query.DESCENDING)
+                    .limit(1))
+
+            docs = list(query.stream())
+
+            if docs:
+                report_data = docs[0].to_dict()
+                report_data['id'] = docs[0].id
+
+                # Convert timestamps
+                for field in ['generated_at', 'period_start', 'period_end', 'cached_until']:
+                    if field in report_data and hasattr(report_data[field], 'timestamp'):
+                        report_data[field] = report_data[field].replace(tzinfo=None)
+
+                self.logger.info(f"Found cached {report_type} report for {subject}")
+                return report_data
+            else:
+                self.logger.info(f"No cached {report_type} report found for {subject}")
+                return None
+
+        except Exception as e:
+            self.logger.error(f"Error fetching cached report: {e}")
+            return None
+
+    # ========== WEEKLY NEWSLETTERS ==========
+
+    def save_weekly_newsletter(self, newsletter_data: Dict[str, Any]) -> Optional[str]:
+        """
+        Save weekly newsletter to Firestore
+
+        Args:
+            newsletter_data: Dictionary containing newsletter fields
+                - week_start: datetime
+                - week_end: datetime
+                - generated_at: datetime
+                - markdown_content: str
+                - html_content: str
+                - sections: Dict[str, str]
+                - articles_analyzed: int
+                - previous_newsletter_id: Optional[str]
+                - predictions_from_last_week: Optional[str]
+                - metadata: Dict
+
+        Returns:
+            Document ID if successful, None otherwise
+        """
+        try:
+            # Add timestamp if not provided
+            if 'generated_at' not in newsletter_data:
+                newsletter_data['generated_at'] = datetime.now()
+
+            # Use week_start as document ID for deduplication (format: YYYY-MM-DD)
+            week_start = newsletter_data['week_start']
+            if isinstance(week_start, datetime):
+                doc_id = week_start.strftime('%Y-%m-%d')
+            else:
+                doc_id = str(week_start)
+
+            # Save to Firestore
+            doc_ref = self.db.collection('weekly_newsletters').document(doc_id)
+            doc_ref.set(newsletter_data)
+
+            self.logger.info(f"Saved weekly newsletter for week of {doc_id}")
+            return doc_id
+
+        except Exception as e:
+            self.logger.error(f"Error saving weekly newsletter: {e}")
+            return None
+
+    def get_newsletter(self, newsletter_id: str) -> Optional[Dict[str, Any]]:
+        """
+        Get a specific newsletter by ID (date)
+
+        Args:
+            newsletter_id: Document ID (YYYY-MM-DD format)
+
+        Returns:
+            Newsletter dictionary or None if not found
+        """
+        try:
+            doc_ref = self.db.collection('weekly_newsletters').document(newsletter_id)
+            doc = doc_ref.get()
+
+            if doc.exists:
+                newsletter_data = doc.to_dict()
+                newsletter_data['id'] = doc.id
+
+                # Convert timestamps
+                for field in ['week_start', 'week_end', 'generated_at']:
+                    if field in newsletter_data and hasattr(newsletter_data[field], 'timestamp'):
+                        newsletter_data[field] = newsletter_data[field].replace(tzinfo=None)
+
+                return newsletter_data
+            else:
+                self.logger.info(f"Newsletter {newsletter_id} not found")
+                return None
+
+        except Exception as e:
+            self.logger.error(f"Error fetching newsletter: {e}")
+            return None
+
+    def get_latest_newsletter(self) -> Optional[Dict[str, Any]]:
+        """
+        Get the most recent newsletter
+
+        Returns:
+            Newsletter dictionary or None if not found
+        """
+        try:
+            query = (self.db.collection('weekly_newsletters')
+                    .order_by('generated_at', direction=firestore.Query.DESCENDING)
+                    .limit(1))
+
+            docs = list(query.stream())
+
+            if docs:
+                newsletter_data = docs[0].to_dict()
+                newsletter_data['id'] = docs[0].id
+
+                # Convert timestamps
+                for field in ['week_start', 'week_end', 'generated_at']:
+                    if field in newsletter_data and hasattr(newsletter_data[field], 'timestamp'):
+                        newsletter_data[field] = newsletter_data[field].replace(tzinfo=None)
+
+                return newsletter_data
+            else:
+                self.logger.info("No newsletters found")
+                return None
+
+        except Exception as e:
+            self.logger.error(f"Error fetching latest newsletter: {e}")
+            return None
+
     # ========== HEALTH CHECK ==========
 
     def health_check(self) -> Dict[str, Any]:
@@ -354,7 +777,7 @@ class DatabaseService:
             return {
                 'status': 'healthy',
                 'database': 'aviation-intelligence',
-                'collections': ['news_articles', 'insights']
+                'collections': ['news_articles', 'insights', 'tsa_data', 'fred_data', 'airline_reports', 'weekly_newsletters']
             }
         except Exception as e:
             return {
