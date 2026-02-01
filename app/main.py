@@ -9,9 +9,10 @@ import logging
 from datetime import datetime
 from flask import Flask, jsonify, request
 from flask_cors import CORS
+from utils.auth import require_api_key
 
 app = Flask(__name__)
-CORS(app)
+CORS(app, expose_headers=['X-API-Key'], allow_headers=['Content-Type', 'X-API-Key'])
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -317,6 +318,7 @@ def monitoring_metrics():
 # ========== NEWS INGESTION ENDPOINTS ==========
 
 @app.route('/api/news/ingest', methods=['POST'])
+@require_api_key
 def ingest_news():
     """
     Trigger news ingestion from all sources
@@ -626,6 +628,7 @@ def get_fred_historical():
 # ========== AI INSIGHTS ENDPOINTS ==========
 
 @app.route('/api/reports/generate', methods=['POST'])
+@require_api_key
 def generate_report():
     """
     Generate an airline or industry sector report using AI
@@ -774,6 +777,7 @@ def get_report(report_id):
         }), 500
 
 @app.route('/api/newsletter/generate', methods=['POST'])
+@require_api_key
 def generate_newsletter():
     """
     Generate a weekly newsletter
