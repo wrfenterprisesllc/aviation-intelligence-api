@@ -504,6 +504,138 @@ def get_articles():
             'timestamp': datetime.now().isoformat()
         }), 500
 
+@app.route('/api/news/enhance/<article_id>', methods=['POST'])
+@require_api_key
+def enhance_article(article_id):
+    """
+    Enhance a news article with AI-generated summary and impact statement
+
+    POST /api/news/enhance/<article_id>
+
+    Returns:
+        Enhanced article with ai_summary and impact_statement fields
+    """
+    try:
+        # Fetch article from database
+        article = db_service.get_article_by_id(article_id)
+
+        if not article:
+            return jsonify({
+                'success': False,
+                'error': 'Article not found'
+            }), 404
+
+        # Check if already enhanced
+        if article.get('ai_summary') and article.get('impact_statement'):
+            logger.info(f"Article {article_id} already enhanced")
+            return jsonify({
+                'success': True,
+                'article': article,
+                'message': 'Article already enhanced'
+            })
+
+        # Initialize enhancement service
+        from app.services.gemini_service import GeminiService
+        from app.services.article_enhancement_service import ArticleEnhancementService
+
+        gemini = GeminiService()
+        enhancer = ArticleEnhancementService(gemini)
+
+        # Enhance article
+        enhanced = enhancer.enhance_article(article)
+
+        # Update in database
+        db_service.db.collection('news_articles').document(article_id).update({
+            'ai_summary': enhanced.get('ai_summary'),
+            'impact_statement': enhanced.get('impact_statement')
+        })
+
+        logger.info(f"✅ Article {article_id} enhanced successfully")
+
+        return jsonify({
+            'success': True,
+            'article': enhanced,
+            'enhancements': {
+                'ai_summary_length': len(enhanced.get('ai_summary', '')),
+                'has_impact_statement': bool(enhanced.get('impact_statement'))
+            }
+        })
+
+    except Exception as e:
+        logger.error(f"❌ Article enhancement failed: {e}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+
+@app.route('/api/news/enhance-batch', methods=['POST'])
+@require_api_key
+def enhance_articles_batch():
+    """
+    Enhance multiple articles with AI summaries and impact statements
+
+    POST /api/news/enhance-batch
+    Body: { "limit": 10, "tags": ["aviation", "airline_news"] }
+
+    Returns:
+        Status of batch enhancement operation
+    """
+    try:
+        data = request.get_json() or {}
+        limit = data.get('limit', 10)
+        tags = data.get('tags')
+
+        # Fetch articles without AI enhancements
+        articles = db_service.get_articles(tags=tags, limit=limit)
+
+        # Filter articles that need enhancement
+        to_enhance = [
+            a for a in articles
+            if not a.get('ai_summary') or not a.get('impact_statement')
+        ]
+
+        logger.info(f"Found {len(to_enhance)} articles to enhance")
+
+        # Initialize services
+        from app.services.gemini_service import GeminiService
+        from app.services.article_enhancement_service import ArticleEnhancementService
+
+        gemini = GeminiService()
+        enhancer = ArticleEnhancementService(gemini)
+
+        # Enhance each article
+        enhanced_count = 0
+        for article in to_enhance:
+            try:
+                enhanced = enhancer.enhance_article(article)
+
+                # Update in database
+                db_service.db.collection('news_articles').document(article['id']).update({
+                    'ai_summary': enhanced.get('ai_summary'),
+                    'impact_statement': enhanced.get('impact_statement')
+                })
+
+                enhanced_count += 1
+
+            except Exception as e:
+                logger.warning(f"Failed to enhance article {article.get('id')}: {e}")
+                continue
+
+        return jsonify({
+            'success': True,
+            'total_articles': len(articles),
+            'enhanced_count': enhanced_count,
+            'already_enhanced': len(articles) - len(to_enhance)
+        })
+
+    except Exception as e:
+        logger.error(f"❌ Batch enhancement failed: {e}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
 @app.route('/api/news/stats', methods=['GET'])
 def get_news_stats():
     """Get statistics about articles in the database"""

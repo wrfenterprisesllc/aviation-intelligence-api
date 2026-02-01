@@ -38,6 +38,8 @@ class NewsArticle:
     entities: List[Dict[str, Any]]
     raw_payload: Dict[str, Any]
     id: Optional[str] = None
+    ai_summary: Optional[str] = None          # AI-generated 100-200 word summary
+    impact_statement: Optional[str] = None    # One sentence impact analysis
     
     def __post_init__(self):
         """Post-initialization processing"""
@@ -127,8 +129,9 @@ class NewsArticle:
         # Filter out any extra fields that aren't part of NewsArticle model
         # This handles cases where Firestore has extra fields like 'source_type'
         valid_fields = {
-            'source', 'source_url', 'title', 'summary', 'content', 
-            'published_at', 'ingested_at', 'tags', 'entities', 'raw_payload', 'id'
+            'source', 'source_url', 'title', 'summary', 'content',
+            'published_at', 'ingested_at', 'tags', 'entities', 'raw_payload', 'id',
+            'ai_summary', 'impact_statement'
         }
         filtered_data = {k: v for k, v in data.items() if k in valid_fields}
         
@@ -138,7 +141,9 @@ class NewsArticle:
             'entities': [],
             'raw_payload': {},
             'summary': '',
-            'content': ''
+            'content': '',
+            'ai_summary': None,
+            'impact_statement': None
         }
         
         for field, default_value in defaults.items():
