@@ -18,7 +18,8 @@ steps:
       - '--region=us-central1'
       - '--platform=managed'
       - '--allow-unauthenticated'
-      - '--memory=512Mi'
+      - '--memory=1Gi'
+      - '--timeout=300'
       # Environment variables from Secret Manager
       - '--set-secrets=NEWSAPI_KEY=newsapi-key:latest'
       - '--set-secrets=GEMINI_API_KEY=gemini-api-key:latest'
