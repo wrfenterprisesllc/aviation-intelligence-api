@@ -28,8 +28,8 @@ class GeminiService:
         genai.configure(api_key=self.api_key)
 
         # Use Gemini 1.5 Flash for cost-effective generation
-        # Using 'gemini-1.5-flash-latest' as stable model identifier
-        self.model = genai.GenerativeModel('gemini-1.5-flash-latest')
+        # Using 'models/gemini-1.5-flash' without latest suffix
+        self.model = genai.GenerativeModel('models/gemini-1.5-flash')
 
         logger.info("✅ Gemini service initialized successfully")
 
