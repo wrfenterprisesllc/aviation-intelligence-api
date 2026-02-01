@@ -32,4 +32,5 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
   CMD curl -f http://localhost:8080/health || exit 1
 
 # Start application with gunicorn optimized for Cloud Run
-CMD exec gunicorn --bind :$PORT --workers 1 --timeout 30 --keep-alive 2 --max-requests 1000 app.main:app
+# Increased timeout to 120s to allow for slow cold starts with Firestore/API initialization
+CMD exec gunicorn --bind :$PORT --workers 1 --timeout 120 --keep-alive 2 --max-requests 1000 app.main:app
