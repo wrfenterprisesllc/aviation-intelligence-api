@@ -6,7 +6,7 @@ Aviation Intelligence API - Live Data Integration with Monitoring
 import os
 import json
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from flask import Flask, jsonify, request
 from flask_cors import CORS
 from app.utils.auth import require_api_key
@@ -1141,18 +1141,19 @@ def get_operational_risks():
     start_time = datetime.now()
 
     try:
-        if not db_service or not db_service.is_available():
+        if not db_service:
             return jsonify({
                 'success': False,
-                'error': 'Database service unavailable',
+                'error': 'Database service not available',
                 'timestamp': datetime.now().isoformat()
             }), 503
 
         # Fetch articles tagged with 'operational_risk' from last 30 days
-        articles = db_service.get_news_articles(
-            tags='operational_risk',
-            limit=5,
-            days_back=30
+        start_date = datetime.now() - timedelta(days=30)
+        articles = db_service.get_articles(
+            tags=['operational_risk'],
+            start_date=start_date,
+            limit=5
         )
 
         response_time = (datetime.now() - start_time).total_seconds() * 1000
@@ -1186,18 +1187,19 @@ def get_financial_risks():
     start_time = datetime.now()
 
     try:
-        if not db_service or not db_service.is_available():
+        if not db_service:
             return jsonify({
                 'success': False,
-                'error': 'Database service unavailable',
+                'error': 'Database service not available',
                 'timestamp': datetime.now().isoformat()
             }), 503
 
         # Fetch articles tagged with 'financial_risk' from last 30 days
-        articles = db_service.get_news_articles(
-            tags='financial_risk',
-            limit=5,
-            days_back=30
+        start_date = datetime.now() - timedelta(days=30)
+        articles = db_service.get_articles(
+            tags=['financial_risk'],
+            start_date=start_date,
+            limit=5
         )
 
         response_time = (datetime.now() - start_time).total_seconds() * 1000
@@ -1231,18 +1233,19 @@ def get_regulatory_risks():
     start_time = datetime.now()
 
     try:
-        if not db_service or not db_service.is_available():
+        if not db_service:
             return jsonify({
                 'success': False,
-                'error': 'Database service unavailable',
+                'error': 'Database service not available',
                 'timestamp': datetime.now().isoformat()
             }), 503
 
         # Fetch articles tagged with 'regulatory' from last 30 days
-        articles = db_service.get_news_articles(
-            tags='regulatory',
-            limit=5,
-            days_back=30
+        start_date = datetime.now() - timedelta(days=30)
+        articles = db_service.get_articles(
+            tags=['regulatory'],
+            start_date=start_date,
+            limit=5
         )
 
         response_time = (datetime.now() - start_time).total_seconds() * 1000
