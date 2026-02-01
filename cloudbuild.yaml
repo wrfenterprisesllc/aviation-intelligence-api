@@ -28,5 +28,9 @@ steps:
       - '--set-env-vars=GCP_PROJECT_ID=$PROJECT_ID'
       - '--set-env-vars=FIRESTORE_DATABASE=aviation-intelligence'
 
+# Use Cloud Logging for build logs (fixes service_account error)
+options:
+  logging: CLOUD_LOGGING_ONLY
+
 images:
   - 'us-central1-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/aviation-intelligence-api:$COMMIT_SHA'

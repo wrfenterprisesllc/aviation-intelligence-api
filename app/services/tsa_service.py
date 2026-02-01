@@ -14,13 +14,14 @@ import logging
 logger = logging.getLogger(__name__)
 
 class TSADataService:
-    """Real-time TSA passenger data scraper"""
-    
-    def __init__(self):
+    """Real-time TSA passenger data scraper with Firestore persistence"""
+
+    def __init__(self, db_service=None):
         self.base_url = "https://www.tsa.gov/coronavirus/passenger-throughput"
         self.headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
         }
+        self.db_service = db_service
         
     def get_real_tsa_data(self):
         """Scrape real TSA passenger throughput data"""
@@ -58,18 +59,27 @@ class TSADataService:
                             
                             # Calculate comparison to 2019 (if available)
                             comparison_2019 = self._calculate_2019_comparison(current_throughput)
-                            
+
+                            tsa_data = {
+                                'current_throughput': current_throughput,
+                                'date': self._parse_date(date_text),
+                                'compared_to_2019': comparison_2019,
+                                'source': 'TSA.gov live data',
+                                'data_quality': 'live_scrape',
+                                'last_updated': datetime.now().isoformat(),
+                                'trend_analysis': self._analyze_trend(current_throughput)
+                            }
+
+                            # Save to Firestore if database service available
+                            if self.db_service:
+                                try:
+                                    self.db_service.save_tsa_data(tsa_data)
+                                except Exception as e:
+                                    logger.warning(f"Failed to save TSA data to Firestore: {e}")
+
                             return {
                                 'success': True,
-                                'data': {
-                                    'current_throughput': current_throughput,
-                                    'date': self._parse_date(date_text),
-                                    'compared_to_2019': comparison_2019,
-                                    'source': 'TSA.gov live data',
-                                    'data_quality': 'live_scrape',
-                                    'last_updated': datetime.now().isoformat(),
-                                    'trend_analysis': self._analyze_trend(current_throughput)
-                                }
+                                'data': tsa_data
                             }
                             
                 logger.warning("❌ Could not parse TSA data")
@@ -153,21 +163,30 @@ class TSADataService:
             weekly_factor = 1.0
         
         adjusted_throughput = int(base_throughput * seasonal_factor * weekly_factor)
-        
+
+        tsa_data = {
+            'current_throughput': adjusted_throughput,
+            'date': current_date.strftime('%Y-%m-%d'),
+            'compared_to_2019': round(95.2 * seasonal_factor, 1),
+            'seasonal_factor': round(seasonal_factor, 2),
+            'weekly_factor': round(weekly_factor, 2),
+            'source': 'Enhanced modeling (TSA scraping unavailable)',
+            'data_quality': 'model_fallback',
+            'last_updated': current_date.isoformat(),
+            'trend_analysis': self._analyze_trend(adjusted_throughput),
+            'note': 'Realistic modeling based on historical patterns'
+        }
+
+        # Save to Firestore if database service available
+        if self.db_service:
+            try:
+                self.db_service.save_tsa_data(tsa_data)
+            except Exception as e:
+                logger.warning(f"Failed to save TSA fallback data to Firestore: {e}")
+
         return {
             'success': True,
-            'data': {
-                'current_throughput': adjusted_throughput,
-                'date': current_date.strftime('%Y-%m-%d'),
-                'compared_to_2019': round(95.2 * seasonal_factor, 1),
-                'seasonal_factor': round(seasonal_factor, 2),
-                'weekly_factor': round(weekly_factor, 2),
-                'source': 'Enhanced modeling (TSA scraping unavailable)',
-                'data_quality': 'model_fallback',
-                'last_updated': current_date.isoformat(),
-                'trend_analysis': self._analyze_trend(adjusted_throughput),
-                'note': 'Realistic modeling based on historical patterns'
-            }
+            'data': tsa_data
         }
 
 # Test function

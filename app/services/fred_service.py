@@ -6,14 +6,20 @@ Using Effective Yield series instead of spread indices
 
 import requests
 import json
+import os
+import logging
 from datetime import datetime
 
+logger = logging.getLogger(__name__)
+
 class FREDCreditSpreadsFinal:
-    """Final production FRED credit spreads using correct series"""
-    
-    def __init__(self):
-        self.api_key = "13ab7454de31dec427aa8c95524d3e9a"
+    """Final production FRED credit spreads using correct series with Firestore persistence"""
+
+    def __init__(self, db_service=None):
+        # Use environment variable for API key, fallback to hardcoded for backward compatibility
+        self.api_key = os.getenv('FRED_API_KEY', '13ab7454de31dec427aa8c95524d3e9a')
         self.base_url = "https://api.stlouisfed.org/fred/series/observations"
+        self.db_service = db_service
         
     def get_real_credit_spreads(self):
         """Get real credit spreads using correct FRED series"""
@@ -75,24 +81,33 @@ class FREDCreditSpreadsFinal:
                     trend = "tightening"
                 elif credit_spread_bps > 200:
                     trend = "widening"
-                
+
+                fred_data = {
+                    'credit_spread_bps': credit_spread_bps,
+                    'corporate_yield_pct': round(corporate_yield, 2),
+                    'treasury_yield_pct': round(treasury_yield, 2),
+                    'spread_description': condition,
+                    'risk_level': risk_level,
+                    'trend': trend,
+                    'data_date': corp_date,
+                    'source': 'Federal Reserve Economic Data (FRED)',
+                    'series_used': {
+                        'corporate': 'BAMLC0A4CBBBEY (BBB Corporate Effective Yield)',
+                        'treasury': 'DGS10 (10-Year Treasury)'
+                    },
+                    'aviation_context': 'BBB rating represents typical aviation sector credit quality'
+                }
+
+                # Save to Firestore if database service available
+                if self.db_service:
+                    try:
+                        self.db_service.save_fred_data(fred_data)
+                    except Exception as e:
+                        logger.warning(f"Failed to save FRED data to Firestore: {e}")
+
                 return {
                     'success': True,
-                    'data': {
-                        'credit_spread_bps': credit_spread_bps,
-                        'corporate_yield_pct': round(corporate_yield, 2),
-                        'treasury_yield_pct': round(treasury_yield, 2),
-                        'spread_description': condition,
-                        'risk_level': risk_level,
-                        'trend': trend,
-                        'data_date': corp_date,
-                        'source': 'Federal Reserve Economic Data (FRED)',
-                        'series_used': {
-                            'corporate': 'BAMLC0A4CBBBEY (BBB Corporate Effective Yield)',
-                            'treasury': 'DGS10 (10-Year Treasury)'
-                        },
-                        'aviation_context': 'BBB rating represents typical aviation sector credit quality'
-                    },
+                    'data': fred_data,
                     'cache_info': {
                         'fresh': True,
                         'response_time_ms': 0.1,
