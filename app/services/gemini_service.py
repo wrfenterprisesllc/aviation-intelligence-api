@@ -27,8 +27,8 @@ class GeminiService:
         # Configure Gemini API
         genai.configure(api_key=self.api_key)
 
-        # Use Gemini 2.0 Flash for cost-effective generation
-        self.model = genai.GenerativeModel('gemini-2.0-flash-exp')
+        # Use Gemini 1.5 Flash for cost-effective generation
+        self.model = genai.GenerativeModel('gemini-1.5-flash')
 
         logger.info("✅ Gemini service initialized successfully")
 
