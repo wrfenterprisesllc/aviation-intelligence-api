@@ -9,7 +9,7 @@ import logging
 from datetime import datetime
 from flask import Flask, jsonify, request
 from flask_cors import CORS
-from utils.auth import require_api_key
+from app.utils.auth import require_api_key
 
 app = Flask(__name__)
 CORS(app, expose_headers=['X-API-Key'], allow_headers=['Content-Type', 'X-API-Key'])
