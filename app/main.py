@@ -1273,6 +1273,137 @@ def get_regulatory_risks():
             'timestamp': datetime.now().isoformat()
         }), 500
 
+# ============================================================================
+# WEEKLY OUTLOOK INSIGHTS ENDPOINTS - AI-Generated Content
+# ============================================================================
+
+@app.route('/api/weekly-outlook/investment-themes')
+def get_investment_themes():
+    """Get AI-generated investment themes for weekly outlook"""
+    start_time = datetime.now()
+
+    try:
+        if not insights_service:
+            return jsonify({
+                'success': False,
+                'error': 'Insights service not available',
+                'timestamp': datetime.now().isoformat()
+            }), 503
+
+        # Generate investment themes (uses cache if available)
+        themes = insights_service.generate_investment_themes(use_cache=True)
+
+        response_time = (datetime.now() - start_time).total_seconds() * 1000
+
+        if themes:
+            return jsonify({
+                'success': True,
+                'themes': themes,
+                'count': len(themes),
+                'timestamp': datetime.now().isoformat(),
+                'response_time_ms': round(response_time, 1)
+            })
+        else:
+            return jsonify({
+                'success': False,
+                'error': 'Failed to generate investment themes',
+                'timestamp': datetime.now().isoformat(),
+                'response_time_ms': round(response_time, 1)
+            }), 500
+
+    except Exception as e:
+        logger.error(f"❌ Error in investment themes endpoint: {e}")
+        return jsonify({
+            'success': False,
+            'error': 'Internal server error',
+            'message': str(e),
+            'timestamp': datetime.now().isoformat()
+        }), 500
+
+@app.route('/api/weekly-outlook/recommendations')
+def get_strategic_recommendations():
+    """Get AI-generated strategic recommendations for weekly outlook"""
+    start_time = datetime.now()
+
+    try:
+        if not insights_service:
+            return jsonify({
+                'success': False,
+                'error': 'Insights service not available',
+                'timestamp': datetime.now().isoformat()
+            }), 503
+
+        # Generate strategic recommendations (uses cache if available)
+        recommendation = insights_service.generate_strategic_recommendations(use_cache=True)
+
+        response_time = (datetime.now() - start_time).total_seconds() * 1000
+
+        if recommendation:
+            return jsonify({
+                'success': True,
+                'recommendation': recommendation,
+                'timestamp': datetime.now().isoformat(),
+                'response_time_ms': round(response_time, 1)
+            })
+        else:
+            return jsonify({
+                'success': False,
+                'error': 'Failed to generate strategic recommendations',
+                'timestamp': datetime.now().isoformat(),
+                'response_time_ms': round(response_time, 1)
+            }), 500
+
+    except Exception as e:
+        logger.error(f"❌ Error in strategic recommendations endpoint: {e}")
+        return jsonify({
+            'success': False,
+            'error': 'Internal server error',
+            'message': str(e),
+            'timestamp': datetime.now().isoformat()
+        }), 500
+
+@app.route('/api/weekly-outlook/executive-summary')
+def get_executive_summary():
+    """Get AI-generated executive summary for weekly outlook"""
+    start_time = datetime.now()
+
+    try:
+        if not insights_service:
+            return jsonify({
+                'success': False,
+                'error': 'Insights service not available',
+                'timestamp': datetime.now().isoformat()
+            }), 503
+
+        # Generate executive summary (uses cache if available)
+        summary = insights_service.generate_executive_summary(use_cache=True)
+
+        response_time = (datetime.now() - start_time).total_seconds() * 1000
+
+        if summary:
+            return jsonify({
+                'success': True,
+                'summary': summary,
+                'timestamp': datetime.now().isoformat(),
+                'response_time_ms': round(response_time, 1)
+            })
+        else:
+            return jsonify({
+                'success': False,
+                'error': 'Failed to generate executive summary',
+                'timestamp': datetime.now().isoformat(),
+                'response_time_ms': round(response_time, 1)
+            }), 500
+
+    except Exception as e:
+        logger.error(f"❌ Error in executive summary endpoint: {e}")
+        return jsonify({
+            'success': False,
+            'error': 'Internal server error',
+            'message': str(e),
+            'timestamp': datetime.now().isoformat()
+        }), 500
+
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 8080))
     app.run(host='0.0.0.0', port=port, debug=False)

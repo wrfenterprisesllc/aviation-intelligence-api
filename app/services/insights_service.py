@@ -491,3 +491,355 @@ Generate the newsletter now:"""
             sections[current_section] = '\n'.join(current_content).strip()
 
         return sections
+
+    # =================================================================
+    # WEEKLY OUTLOOK INSIGHTS (Investment Themes, Recommendations, Executive Summary)
+    # =================================================================
+
+    def generate_investment_themes(self, use_cache: bool = True) -> Optional[List[str]]:
+        """
+        Generate 3-5 investment themes using Gemini AI
+
+        Args:
+            use_cache: Whether to use cached themes (24-hour cache)
+
+        Returns:
+            List of investment theme strings (one sentence each)
+        """
+        try:
+            logger.info("📊 Generating investment themes...")
+
+            # Check cache if enabled
+            if use_cache:
+                cached = self._get_cached_weekly_insight('investment_themes')
+                if cached:
+                    logger.info("✅ Using cached investment themes")
+                    return cached.get('themes', [])
+
+            # Get market context
+            context = self._get_weekly_market_context()
+
+            # Build Gemini prompt
+            prompt = f"""Based on current aviation industry data, identify 3-5 key investment themes.
+
+CURRENT MARKET CONTEXT (Last 7 Days):
+
+MAJOR HEADLINES:
+{chr(10).join(context['headlines']) if context['headlines'] else '• No major headlines this week'}
+
+OPERATIONAL RISKS:
+{chr(10).join(f"• {r}" for r in context['operational_risks']) if context['operational_risks'] else '• No significant operational risks'}
+
+FINANCIAL RISKS:
+{chr(10).join(f"• {r}" for r in context['financial_risks']) if context['financial_risks'] else '• No significant financial risks'}
+
+Generate 3-5 investment themes (one sentence each) that:
+1. Reflect current market dynamics and trends
+2. Highlight opportunities or positioning strategies
+3. Use professional, analytical language suitable for institutional investors
+4. Focus on actionable insights
+
+Format your response as a simple list without numbers:
+- [Theme 1]
+- [Theme 2]
+- [Theme 3]
+
+Investment Themes:"""
+
+            # Generate with Gemini
+            response = self.gemini.generate_content(prompt, temperature=0.7)
+
+            if not response:
+                logger.warning("⚠️ Gemini returned empty response for investment themes")
+                return None
+
+            # Parse response into list
+            themes = self._parse_bullet_list(response)
+
+            if themes:
+                # Cache the result
+                self._cache_weekly_insight('investment_themes', {'themes': themes})
+                logger.info(f"✅ Generated {len(themes)} investment themes")
+                return themes
+            else:
+                logger.warning("⚠️ Failed to parse investment themes from Gemini response")
+                return None
+
+        except Exception as e:
+            logger.error(f"❌ Error generating investment themes: {e}")
+            return None
+
+    def generate_strategic_recommendations(self, use_cache: bool = True) -> Optional[str]:
+        """
+        Generate strategic recommendations using Gemini AI
+
+        Args:
+            use_cache: Whether to use cached recommendations (24-hour cache)
+
+        Returns:
+            Strategic recommendation paragraph (2-3 sentences)
+        """
+        try:
+            logger.info("💡 Generating strategic recommendations...")
+
+            # Check cache if enabled
+            if use_cache:
+                cached = self._get_cached_weekly_insight('strategic_recommendations')
+                if cached:
+                    logger.info("✅ Using cached strategic recommendations")
+                    return cached.get('recommendation', '')
+
+            # Get market context
+            context = self._get_weekly_market_context()
+
+            # Get investment themes (will use cache if available)
+            themes = self.generate_investment_themes(use_cache=True)
+            themes_text = '\n'.join(f"• {t}" for t in themes) if themes else "• No specific themes identified"
+
+            # Build Gemini prompt
+            prompt = f"""Generate strategic investment recommendation for the aviation sector.
+
+CONTEXT:
+
+INVESTMENT THEMES:
+{themes_text}
+
+KEY RISKS:
+Operational: {', '.join(context['operational_risks'][:2]) if context['operational_risks'] else 'None identified'}
+Financial: {', '.join(context['financial_risks'][:2]) if context['financial_risks'] else 'None identified'}
+
+RECENT DEVELOPMENTS:
+{chr(10).join(context['headlines'][:3]) if context['headlines'] else '• Market conditions stable'}
+
+Provide a 2-3 sentence strategic recommendation addressing:
+1. Overall sector positioning (overweight/neutral/underweight or maintain/increase/reduce exposure)
+2. Specific focus areas or segments (e.g., premium carriers, international routes, etc.)
+3. Key variables or metrics to monitor going forward
+
+Use professional language suitable for institutional investors. Be specific and actionable.
+
+Strategic Recommendation:"""
+
+            # Generate with Gemini
+            response = self.gemini.generate_content(prompt, temperature=0.7)
+
+            if not response:
+                logger.warning("⚠️ Gemini returned empty response for strategic recommendations")
+                return None
+
+            # Clean up response
+            recommendation = response.strip()
+
+            # Cache the result
+            self._cache_weekly_insight('strategic_recommendations', {'recommendation': recommendation})
+            logger.info("✅ Generated strategic recommendations")
+            return recommendation
+
+        except Exception as e:
+            logger.error(f"❌ Error generating strategic recommendations: {e}")
+            return None
+
+    def generate_executive_summary(self, use_cache: bool = True) -> Optional[str]:
+        """
+        Generate executive summary using Gemini AI
+
+        Args:
+            use_cache: Whether to use cached summary (24-hour cache)
+
+        Returns:
+            Executive summary paragraph (2-3 sentences)
+        """
+        try:
+            logger.info("📋 Generating executive summary...")
+
+            # Check cache if enabled
+            if use_cache:
+                cached = self._get_cached_weekly_insight('executive_summary')
+                if cached:
+                    logger.info("✅ Using cached executive summary")
+                    return cached.get('summary', '')
+
+            # Get market context
+            context = self._get_weekly_market_context()
+
+            # Build Gemini prompt
+            prompt = f"""Generate a professional 2-3 sentence executive summary for aviation industry weekly outlook.
+
+CURRENT CONTEXT (Last 7 Days):
+
+MAJOR HEADLINES:
+{chr(10).join(context['headlines'][:5]) if context['headlines'] else '• Market activity moderate this week'}
+
+KEY RISKS:
+Operational: {', '.join(context['operational_risks'][:2]) if context['operational_risks'] else 'Limited operational concerns'}
+Financial: {', '.join(context['financial_risks'][:2]) if context['financial_risks'] else 'Stable financial environment'}
+
+Create a concise, analytical summary (2-3 sentences) highlighting:
+1. Overall sector health and momentum (resilient/strong/challenged/mixed)
+2. Key trends or developments from the headlines
+3. Notable risk factors or opportunities
+
+Use professional language suitable for institutional investors. Focus on synthesis rather than listing.
+
+Executive Summary:"""
+
+            # Generate with Gemini
+            response = self.gemini.generate_content(prompt, temperature=0.7)
+
+            if not response:
+                logger.warning("⚠️ Gemini returned empty response for executive summary")
+                return None
+
+            # Clean up response
+            summary = response.strip()
+
+            # Cache the result
+            self._cache_weekly_insight('executive_summary', {'summary': summary})
+            logger.info("✅ Generated executive summary")
+            return summary
+
+        except Exception as e:
+            logger.error(f"❌ Error generating executive summary: {e}")
+            return None
+
+    def _get_weekly_market_context(self) -> Dict[str, Any]:
+        """
+        Aggregate current market metrics and news for weekly outlook AI context
+
+        Returns:
+            Dictionary with market metrics, news headlines, and risk factors
+        """
+        try:
+            # Get recent news articles (last 7 days)
+            start_date = datetime.now() - timedelta(days=7)
+            recent_news = self.db.get_articles(
+                start_date=start_date,
+                limit=10
+            )
+
+            # Extract headlines and AI summaries
+            headlines = []
+            for article in recent_news[:5]:
+                title = article.get('title', '')
+                impact = article.get('impact_statement', '')
+                if title:
+                    headlines.append(f"• {title}" + (f" - {impact}" if impact else ""))
+
+            # Get risk factors
+            operational_risks = self.db.get_articles(
+                tags=['operational_risk'],
+                start_date=start_date,
+                limit=3
+            )
+
+            financial_risks = self.db.get_articles(
+                tags=['financial_risk'],
+                start_date=start_date,
+                limit=3
+            )
+
+            # Extract risk summaries
+            op_risks = [r.get('impact_statement', r.get('title', '')) for r in operational_risks]
+            fin_risks = [r.get('impact_statement', r.get('title', '')) for r in financial_risks]
+
+            return {
+                'headlines': headlines,
+                'operational_risks': op_risks,
+                'financial_risks': fin_risks,
+                'article_count': len(recent_news)
+            }
+
+        except Exception as e:
+            logger.error(f"❌ Error getting market context: {e}")
+            return {
+                'headlines': [],
+                'operational_risks': [],
+                'financial_risks': [],
+                'article_count': 0
+            }
+
+    def _parse_bullet_list(self, text: str) -> List[str]:
+        """
+        Parse bullet list from Gemini response
+
+        Args:
+            text: Response text with bullet items
+
+        Returns:
+            List of items (without bullets)
+        """
+        items = []
+        lines = text.strip().split('\n')
+
+        for line in lines:
+            line = line.strip()
+            # Match patterns like "- ", "• ", or numbers like "1. "
+            if line and (line.startswith('-') or line.startswith('•') or (line[0].isdigit() and '. ' in line)):
+                # Remove bullets/numbering
+                cleaned = line
+                if cleaned.startswith('-'):
+                    cleaned = cleaned[1:].strip()
+                elif cleaned.startswith('•'):
+                    cleaned = cleaned[1:].strip()
+                elif cleaned[0].isdigit():
+                    # Remove number and period
+                    parts = cleaned.split('. ', 1)
+                    if len(parts) > 1:
+                        cleaned = parts[1].strip()
+
+                if cleaned:
+                    items.append(cleaned)
+
+        return items
+
+    def _get_cached_weekly_insight(self, insight_type: str) -> Optional[Dict[str, Any]]:
+        """
+        Get cached weekly outlook insights from Firestore
+
+        Args:
+            insight_type: Type of insight (investment_themes, strategic_recommendations, executive_summary)
+
+        Returns:
+            Cached data if available and fresh (< 24 hours old)
+        """
+        try:
+            # Get latest insight of this type
+            latest = self.db.get_latest_insight(timeframe=insight_type)
+
+            if not latest:
+                return None
+
+            # Check if cache is fresh (< 24 hours)
+            generated_at = latest.get('generated_at')
+            if generated_at:
+                age_hours = (datetime.now() - generated_at).total_seconds() / 3600
+                if age_hours < 24:
+                    return latest.get('data', {})
+
+            return None
+
+        except Exception as e:
+            logger.error(f"❌ Error getting cached insights: {e}")
+            return None
+
+    def _cache_weekly_insight(self, insight_type: str, data: Dict[str, Any]) -> None:
+        """
+        Cache weekly outlook insights to Firestore
+
+        Args:
+            insight_type: Type of insight
+            data: Insight data to cache
+        """
+        try:
+            insight_data = {
+                'timeframe': insight_type,
+                'data': data,
+                'generated_at': datetime.now(),
+                'valid_until': datetime.now() + timedelta(hours=24)
+            }
+
+            self.db.save_insight(insight_data)
+            logger.info(f"✅ Cached {insight_type} insights")
+
+        except Exception as e:
+            logger.error(f"❌ Error caching insights: {e}")
