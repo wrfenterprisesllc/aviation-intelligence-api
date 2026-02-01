@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 
 # Import services - ORDER MATTERS (db_service must be initialized first)
 try:
-    from services.database_service import DatabaseService
+    from app.services.database_service import DatabaseService
     db_service = DatabaseService()
     logger.info("✅ Database service initialized")
 except Exception as e:
@@ -28,7 +28,7 @@ except Exception as e:
     db_service = None
 
 try:
-    from services.fred_service import FREDCreditSpreadsFinal
+    from app.services.fred_service import FREDCreditSpreadsFinal
     fred_service = FREDCreditSpreadsFinal(db_service=db_service)
     logger.info("✅ FRED service initialized with database persistence")
 except Exception as e:
@@ -36,7 +36,7 @@ except Exception as e:
     fred_service = None
 
 try:
-    from services.tsa_service import TSADataService
+    from app.services.tsa_service import TSADataService
     tsa_service = TSADataService(db_service=db_service)
     logger.info("✅ TSA service initialized with database persistence")
 except Exception as e:
@@ -44,7 +44,7 @@ except Exception as e:
     tsa_service = None
 
 try:
-    from services.monitoring_service import MonitoringService
+    from app.services.monitoring_service import MonitoringService
     monitor = MonitoringService()
     logger.info("✅ Monitoring service initialized")
 except Exception as e:
@@ -52,7 +52,7 @@ except Exception as e:
     monitor = None
 
 try:
-    from services.news_ingestion import NewsIngestionService
+    from app.services.news_ingestion import NewsIngestionService
     news_service = NewsIngestionService()
     logger.info("✅ News ingestion service initialized")
 except Exception as e:
@@ -60,8 +60,8 @@ except Exception as e:
     news_service = None
 
 try:
-    from services.gemini_service import GeminiService
-    from services.insights_service import InsightsService
+    from app.services.gemini_service import GeminiService
+    from app.services.insights_service import InsightsService
     gemini_service = GeminiService()
     insights_service = InsightsService(gemini_service=gemini_service, database_service=db_service)
     logger.info("✅ Gemini and Insights services initialized")
