@@ -1131,6 +1131,145 @@ def get_newsletter(newsletter_id):
             'timestamp': datetime.now().isoformat()
         }), 500
 
+# ============================================================================
+# RISK ASSESSMENT ENDPOINTS - For Weekly Outlook
+# ============================================================================
+
+@app.route('/api/risks/operational')
+def get_operational_risks():
+    """Get recent operational risk articles for weekly outlook"""
+    start_time = datetime.now()
+
+    try:
+        if not db_service or not db_service.is_available():
+            return jsonify({
+                'success': False,
+                'error': 'Database service unavailable',
+                'timestamp': datetime.now().isoformat()
+            }), 503
+
+        # Fetch articles tagged with 'operational_risk' from last 30 days
+        articles = db_service.get_news_articles(
+            tags='operational_risk',
+            limit=5,
+            days_back=30
+        )
+
+        response_time = (datetime.now() - start_time).total_seconds() * 1000
+
+        return jsonify({
+            'success': True,
+            'risks': [{
+                'title': article['title'],
+                'impact_statement': article.get('impact_statement') or article.get('summary', '')[:150],
+                'source': article['source'],
+                'published_at': article['published_at'],
+                'tags': article.get('tags', [])
+            } for article in articles],
+            'count': len(articles),
+            'timestamp': datetime.now().isoformat(),
+            'response_time_ms': round(response_time, 1)
+        })
+
+    except Exception as e:
+        logger.error(f"❌ Error in operational risks endpoint: {e}")
+        return jsonify({
+            'success': False,
+            'error': 'Internal server error',
+            'message': str(e),
+            'timestamp': datetime.now().isoformat()
+        }), 500
+
+@app.route('/api/risks/financial')
+def get_financial_risks():
+    """Get recent financial risk articles for weekly outlook"""
+    start_time = datetime.now()
+
+    try:
+        if not db_service or not db_service.is_available():
+            return jsonify({
+                'success': False,
+                'error': 'Database service unavailable',
+                'timestamp': datetime.now().isoformat()
+            }), 503
+
+        # Fetch articles tagged with 'financial_risk' from last 30 days
+        articles = db_service.get_news_articles(
+            tags='financial_risk',
+            limit=5,
+            days_back=30
+        )
+
+        response_time = (datetime.now() - start_time).total_seconds() * 1000
+
+        return jsonify({
+            'success': True,
+            'risks': [{
+                'title': article['title'],
+                'impact_statement': article.get('impact_statement') or article.get('summary', '')[:150],
+                'source': article['source'],
+                'published_at': article['published_at'],
+                'tags': article.get('tags', [])
+            } for article in articles],
+            'count': len(articles),
+            'timestamp': datetime.now().isoformat(),
+            'response_time_ms': round(response_time, 1)
+        })
+
+    except Exception as e:
+        logger.error(f"❌ Error in financial risks endpoint: {e}")
+        return jsonify({
+            'success': False,
+            'error': 'Internal server error',
+            'message': str(e),
+            'timestamp': datetime.now().isoformat()
+        }), 500
+
+@app.route('/api/risks/regulatory')
+def get_regulatory_risks():
+    """Get recent regulatory watch articles for weekly outlook"""
+    start_time = datetime.now()
+
+    try:
+        if not db_service or not db_service.is_available():
+            return jsonify({
+                'success': False,
+                'error': 'Database service unavailable',
+                'timestamp': datetime.now().isoformat()
+            }), 503
+
+        # Fetch articles tagged with 'regulatory' from last 30 days
+        articles = db_service.get_news_articles(
+            tags='regulatory',
+            limit=5,
+            days_back=30
+        )
+
+        response_time = (datetime.now() - start_time).total_seconds() * 1000
+
+        return jsonify({
+            'success': True,
+            'risks': [{
+                'title': article['title'],
+                'impact_statement': article.get('impact_statement') or article.get('summary', '')[:150],
+                'source': article['source'],
+                'published_at': article['published_at'],
+                'tags': article.get('tags', [])
+            } for article in articles],
+            'count': len(articles),
+            'timestamp': datetime.now().isoformat(),
+            'response_time_ms': round(response_time, 1)
+        })
+
+    except Exception as e:
+        logger.error(f"❌ Error in regulatory watch endpoint: {e}")
+        return jsonify({
+            'success': False,
+            'error': 'Internal server error',
+            'message': str(e),
+            'timestamp': datetime.now().isoformat()
+        }), 500
+
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 8080))
     app.run(host='0.0.0.0', port=port, debug=False)

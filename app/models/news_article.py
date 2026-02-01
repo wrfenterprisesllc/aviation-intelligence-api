@@ -212,7 +212,15 @@ class NewsArticle:
             'fuel_costs': ['fuel cost', 'jet fuel', 'oil price', 'fuel hedging'],
             'regulatory': ['faa', 'easa', 'regulatory', 'compliance', 'certification'],
             'sustainability': ['sustainable aviation fuel', 'carbon neutral', 'emissions', 'green aviation'],
-            'travel_demand': ['passenger demand', 'load factor', 'travel trends', 'booking']
+            'travel_demand': ['passenger demand', 'load factor', 'travel trends', 'booking'],
+
+            # Risk-specific tags for weekly outlook
+            'operational_risk': ['atc', 'air traffic control', 'delay', 'disruption', 'shortage',
+                               'weather', 'capacity constraint', 'production delay', 'strike',
+                               'pilot shortage', 'staffing', 'operational issue'],
+            'financial_risk': ['fuel cost pressure', 'credit spread', 'debt', 'bankruptcy risk',
+                             'liquidity', 'earnings miss', 'financial loss', 'cost pressure',
+                             'revenue decline', 'cash flow'],
         }
         
         # Check content against keywords
