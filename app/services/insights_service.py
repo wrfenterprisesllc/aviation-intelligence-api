@@ -702,6 +702,104 @@ Executive Summary:"""
             logger.error(f"❌ Error generating executive summary: {e}")
             return None
 
+    def generate_catalysts(self, use_cache: bool = True) -> Optional[List[Dict[str, str]]]:
+        """
+        Generate upcoming catalysts/events using Gemini AI
+
+        Args:
+            use_cache: Whether to use cached catalysts (7-day cache)
+
+        Returns:
+            List of catalyst dictionaries with 'date' and 'description' keys
+        """
+        try:
+            logger.info("📅 Generating upcoming catalysts...")
+
+            # Check cache if enabled
+            if use_cache:
+                cached = self._get_cached_weekly_insight('catalysts')
+                if cached:
+                    logger.info("✅ Using cached catalysts")
+                    return cached.get('catalysts', [])
+
+            # Get current date for context
+            from datetime import datetime
+            current_date = datetime.now().strftime('%B %d, %Y')
+
+            # Get market context for relevance
+            context = self._get_weekly_market_context()
+
+            # Build Gemini prompt
+            prompt = f"""Generate 5-7 likely upcoming industry catalysts/events for the aviation sector over the next 4 weeks.
+
+CURRENT DATE: {current_date}
+
+RECENT CONTEXT:
+{chr(10).join(context['headlines'][:3]) if context['headlines'] else '• Normal market conditions'}
+
+Generate realistic, sector-relevant catalysts including:
+1. Earnings reports (major carriers like Delta, United, American, Southwest typically report quarterly)
+2. Economic data releases (DOT traffic data, BTS statistics - released monthly)
+3. Regulatory events (FAA announcements, DOT rulemakings)
+4. Industry conferences or events
+5. Known recurring events (e.g., monthly data releases)
+
+Format each catalyst as:
+- [Date Range or Specific Date]: [Event Description]
+
+Example format:
+- Feb 5-9: Major carrier Q4 earnings week (DAL, UAL, AAL)
+- Feb 12: DOT monthly traffic data release
+- Feb 15: FAA operational update expected
+
+Provide 5-7 catalysts, ordered chronologically. Use realistic dates relative to {current_date}.
+
+Catalysts:"""
+
+            # Generate with Gemini
+            response = self.gemini.generate_content(prompt, temperature=0.7)
+
+            if not response:
+                logger.warning("⚠️ Gemini returned empty response for catalysts")
+                return None
+
+            # Parse response into list of dicts
+            catalysts = []
+            lines = response.strip().split('\n')
+
+            for line in lines:
+                line = line.strip()
+                # Match patterns like "- Date: Description" or "• Date: Description"
+                if line and (':' in line):
+                    # Remove bullet if present
+                    if line.startswith('-') or line.startswith('•'):
+                        line = line[1:].strip()
+
+                    # Split on first colon
+                    parts = line.split(':', 1)
+                    if len(parts) == 2:
+                        date_range = parts[0].strip()
+                        description = parts[1].strip()
+
+                        if date_range and description:
+                            catalysts.append({
+                                'date': date_range,
+                                'description': description
+                            })
+
+            if catalysts:
+                # Cache the result (7-day cache for catalysts)
+                self._cache_weekly_insight('catalysts', {'catalysts': catalysts}, cache_days=7)
+                logger.info(f"✅ Generated {len(catalysts)} catalysts")
+                return catalysts
+            else:
+                logger.warning("⚠️ Failed to parse catalysts from Gemini response")
+                return None
+
+        except Exception as e:
+            logger.error(f"❌ Error generating catalysts: {e}")
+            return None
+
     def _get_weekly_market_context(self) -> Dict[str, Any]:
         """
         Aggregate current market metrics and news for weekly outlook AI context
@@ -797,10 +895,10 @@ Executive Summary:"""
         Get cached weekly outlook insights from Firestore
 
         Args:
-            insight_type: Type of insight (investment_themes, strategic_recommendations, executive_summary)
+            insight_type: Type of insight (investment_themes, strategic_recommendations, executive_summary, catalysts)
 
         Returns:
-            Cached data if available and fresh (< 24 hours old)
+            Cached data if available and not expired
         """
         try:
             # Get latest insight of this type
@@ -809,11 +907,10 @@ Executive Summary:"""
             if not latest:
                 return None
 
-            # Check if cache is fresh (< 24 hours)
-            generated_at = latest.get('generated_at')
-            if generated_at:
-                age_hours = (datetime.now() - generated_at).total_seconds() / 3600
-                if age_hours < 24:
+            # Check if cache is still valid using valid_until timestamp
+            valid_until = latest.get('valid_until')
+            if valid_until:
+                if datetime.now() < valid_until:
                     return latest.get('data', {})
 
             return None
@@ -822,24 +919,25 @@ Executive Summary:"""
             logger.error(f"❌ Error getting cached insights: {e}")
             return None
 
-    def _cache_weekly_insight(self, insight_type: str, data: Dict[str, Any]) -> None:
+    def _cache_weekly_insight(self, insight_type: str, data: Dict[str, Any], cache_days: int = 1) -> None:
         """
         Cache weekly outlook insights to Firestore
 
         Args:
             insight_type: Type of insight
             data: Insight data to cache
+            cache_days: Number of days to cache (default 1 day)
         """
         try:
             insight_data = {
                 'timeframe': insight_type,
                 'data': data,
                 'generated_at': datetime.now(),
-                'valid_until': datetime.now() + timedelta(hours=24)
+                'valid_until': datetime.now() + timedelta(days=cache_days)
             }
 
             self.db.save_insight(insight_data)
-            logger.info(f"✅ Cached {insight_type} insights")
+            logger.info(f"✅ Cached {insight_type} insights (valid for {cache_days} days)")
 
         except Exception as e:
             logger.error(f"❌ Error caching insights: {e}")
