@@ -781,6 +781,11 @@ Catalysts:"""
                         date_range = parts[0].strip()
                         description = parts[1].strip()
 
+                        # Remove markdown formatting (**, *, etc.)
+                        import re
+                        date_range = re.sub(r'\*\*', '', date_range).strip()
+                        description = re.sub(r'\*\*', '', description).strip()
+
                         if date_range and description:
                             catalysts.append({
                                 'date': date_range,
