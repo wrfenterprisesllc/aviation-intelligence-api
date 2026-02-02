@@ -7,7 +7,7 @@ Generates airline/industry reports and weekly newsletters using Gemini AI
 import logging
 import markdown
 from datetime import datetime, timedelta
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
