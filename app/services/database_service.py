@@ -189,6 +189,27 @@ class DatabaseService:
             self.logger.error(f"Error fetching article {article_id}: {e}")
             return None
 
+    def update_article(self, article_id: str, updates: Dict[str, Any]) -> bool:
+        """
+        Update an article's fields in Firestore
+
+        Args:
+            article_id: Document ID of the article to update
+            updates: Dictionary of fields to update
+
+        Returns:
+            True if update successful, False otherwise
+        """
+        try:
+            doc_ref = self.db.collection('news_articles').document(article_id)
+            doc_ref.update(updates)
+            self.logger.debug(f"Updated article {article_id}: {list(updates.keys())}")
+            return True
+
+        except Exception as e:
+            self.logger.error(f"Error updating article {article_id}: {e}")
+            return False
+
     def delete_old_articles(self, days_to_keep: int = 90) -> int:
         """
         Delete articles older than specified days

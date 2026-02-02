@@ -270,29 +270,50 @@ class RSSHandler:
         return cleaned.strip()
     
     def _clean_html(self, html_content: str) -> str:
-        """Remove HTML tags and clean content"""
+        """Remove HTML tags and clean content using BeautifulSoup"""
         if not html_content:
             return ""
-        
+
         try:
-            # Simple HTML tag removal (for production, consider using BeautifulSoup)
+            from bs4 import BeautifulSoup
+            import html as html_module
             import re
-            
-            # Remove HTML tags
-            clean_text = re.sub(r'<[^>]+>', '', html_content)
-            
+
+            # Parse HTML with BeautifulSoup
+            soup = BeautifulSoup(html_content, 'html.parser')
+
+            # Remove script and style elements completely
+            for script in soup(["script", "style", "iframe", "noscript"]):
+                script.decompose()
+
+            # Get text content
+            text = soup.get_text()
+
             # Decode HTML entities
-            import html
-            clean_text = html.unescape(clean_text)
-            
-            # Normalize whitespace
-            clean_text = re.sub(r'\s+', ' ', clean_text)
-            
-            return clean_text.strip()
-            
+            text = html_module.unescape(text)
+
+            # Clean up whitespace
+            lines = (line.strip() for line in text.splitlines())
+            chunks = (phrase.strip() for line in lines for phrase in line.split("  "))
+            text = ' '.join(chunk for chunk in chunks if chunk)
+
+            # Remove any remaining special characters or artifacts
+            text = re.sub(r'\s+', ' ', text)
+
+            return text.strip()
+
         except Exception as e:
-            logger.warning(f"Error cleaning HTML content: {e}")
-            return html_content
+            logger.warning(f"Error cleaning HTML content with BeautifulSoup: {e}")
+            # Fallback to simple regex if BeautifulSoup fails
+            try:
+                import re
+                import html as html_module
+                clean_text = re.sub(r'<[^>]+>', '', html_content)
+                clean_text = html_module.unescape(clean_text)
+                clean_text = re.sub(r'\s+', ' ', clean_text)
+                return clean_text.strip()
+            except:
+                return html_content
     
     def test_feed(self, feed_url: str) -> Dict[str, Any]:
         """
