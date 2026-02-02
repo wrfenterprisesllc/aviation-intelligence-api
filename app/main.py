@@ -636,6 +636,117 @@ def enhance_articles_batch():
             'error': str(e)
         }), 500
 
+
+@app.route('/api/news/clean-html', methods=['POST'])
+@require_api_key
+def clean_article_html():
+    """
+    Clean HTML markup from article content and summaries
+    This is a one-time cleanup operation for existing articles
+    """
+    start_time = datetime.now()
+
+    try:
+        from bs4 import BeautifulSoup
+        import html as html_module
+        import re
+
+        if not db_service:
+            return jsonify({
+                'success': False,
+                'error': 'Database service not available'
+            }), 503
+
+        # Get limit from request (default 100)
+        data = request.get_json() or {}
+        limit = data.get('limit', 100)
+
+        logger.info(f"🧹 Starting HTML cleanup for up to {limit} articles...")
+
+        # Get all articles
+        articles = db_service.get_articles(limit=limit)
+
+        stats = {
+            'total': len(articles),
+            'cleaned': 0,
+            'skipped': 0,
+            'errors': 0
+        }
+
+        # HTML cleaning function
+        def clean_html(html_content):
+            if not html_content or ('<' not in html_content and '&' not in html_content):
+                return html_content
+
+            try:
+                soup = BeautifulSoup(html_content, 'html.parser')
+                for script in soup(["script", "style", "iframe", "noscript"]):
+                    script.decompose()
+                text = soup.get_text()
+                text = html_module.unescape(text)
+                lines = (line.strip() for line in text.splitlines())
+                chunks = (phrase.strip() for line in lines for phrase in line.split("  "))
+                text = ' '.join(chunk for chunk in chunks if chunk)
+                text = re.sub(r'\s+', ' ', text)
+                return text.strip()
+            except:
+                clean_text = re.sub(r'<[^>]+>', '', html_content)
+                clean_text = html_module.unescape(clean_text)
+                clean_text = re.sub(r'\s+', ' ', clean_text)
+                return clean_text.strip()
+
+        # Process each article
+        for article in articles:
+            try:
+                article_id = article.get('id')
+                needs_update = False
+                updated_fields = {}
+
+                # Check content
+                content = article.get('content', '')
+                if content and ('<' in content or '&' in content):
+                    cleaned = clean_html(content)
+                    if cleaned != content:
+                        updated_fields['content'] = cleaned
+                        needs_update = True
+
+                # Check summary
+                summary = article.get('summary', '')
+                if summary and ('<' in summary or '&' in summary):
+                    cleaned = clean_html(summary)
+                    if cleaned != summary:
+                        updated_fields['summary'] = cleaned
+                        needs_update = True
+
+                if needs_update:
+                    db_service.update_article(article_id, updated_fields)
+                    stats['cleaned'] += 1
+                    logger.debug(f"✓ Cleaned article {article_id}: {list(updated_fields.keys())}")
+                else:
+                    stats['skipped'] += 1
+
+            except Exception as e:
+                stats['errors'] += 1
+                logger.error(f"✗ Error cleaning article: {e}")
+
+        response_time = (datetime.now() - start_time).total_seconds() * 1000
+
+        logger.info(f"🧹 HTML cleanup complete: {stats['cleaned']} cleaned, {stats['skipped']} skipped, {stats['errors']} errors")
+
+        return jsonify({
+            'success': True,
+            'stats': stats,
+            'response_time_ms': round(response_time, 1)
+        })
+
+    except Exception as e:
+        logger.error(f"❌ HTML cleanup failed: {e}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+
 @app.route('/api/news/stats', methods=['GET'])
 def get_news_stats():
     """Get statistics about articles in the database"""
