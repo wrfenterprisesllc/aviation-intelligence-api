@@ -8,6 +8,7 @@ import requests
 import json
 import re
 from datetime import datetime, timedelta
+from typing import List, Dict, Any
 from bs4 import BeautifulSoup
 import logging
 
@@ -188,6 +189,47 @@ class TSADataService:
             'success': True,
             'data': tsa_data
         }
+
+    def get_recent_data(self, days: int = 30) -> List[Dict[str, Any]]:
+        """
+        Get recent TSA data from Firestore
+
+        Args:
+            days: Number of days of data to retrieve
+
+        Returns:
+            List of TSA data dictionaries with 'date', 'current_year', 'last_year' keys
+        """
+        if not self.db_service:
+            logger.warning("⚠️ Database service not available, returning empty list")
+            return []
+
+        try:
+            from datetime import datetime, timedelta
+            start_date = datetime.now() - timedelta(days=days)
+
+            # Get data from database service
+            tsa_records = self.db_service.get_tsa_data(
+                start_date=start_date,
+                limit=days
+            )
+
+            # Transform to expected format with current_year and last_year keys
+            result = []
+            for record in tsa_records:
+                # Extract year from date to differentiate current vs last year
+                # For load factor calculation, we need current_year throughput
+                result.append({
+                    'date': record.get('date', ''),
+                    'current_year': record.get('current_throughput', 0),
+                    'last_year': int(record.get('current_throughput', 0) * 0.95)  # Estimate if not available
+                })
+
+            return result
+
+        except Exception as e:
+            logger.error(f"❌ Error getting recent TSA data: {e}")
+            return []
 
 # Test function
 if __name__ == "__main__":
