@@ -781,6 +781,44 @@ class DatabaseService:
             self.logger.error(f"Error fetching latest newsletter: {e}")
             return None
 
+    def get_all_newsletters(self, limit: Optional[int] = None) -> List[Dict[str, Any]]:
+        """
+        Get all newsletters, ordered by most recent first
+
+        Args:
+            limit: Optional limit on number of newsletters to return
+
+        Returns:
+            List of newsletter dictionaries
+        """
+        try:
+            query = (self.db.collection('weekly_newsletters')
+                    .order_by('generated_at', direction=firestore.Query.DESCENDING))
+
+            if limit:
+                query = query.limit(limit)
+
+            docs = list(query.stream())
+
+            newsletters = []
+            for doc in docs:
+                newsletter_data = doc.to_dict()
+                newsletter_data['id'] = doc.id
+
+                # Convert timestamps
+                for field in ['week_start', 'week_end', 'generated_at']:
+                    if field in newsletter_data and hasattr(newsletter_data[field], 'timestamp'):
+                        newsletter_data[field] = newsletter_data[field].replace(tzinfo=None)
+
+                newsletters.append(newsletter_data)
+
+            self.logger.info(f"Retrieved {len(newsletters)} newsletters")
+            return newsletters
+
+        except Exception as e:
+            self.logger.error(f"Error fetching all newsletters: {e}")
+            return []
+
     # ========== HEALTH CHECK ==========
 
     def health_check(self) -> Dict[str, Any]:

@@ -131,16 +131,33 @@ class InsightsService:
             logger.error(f"❌ Error generating airline report: {e}")
             return None
 
-    def generate_weekly_newsletter(self, week_offset: int = 0) -> Optional[Dict]:
+    def generate_weekly_newsletter(
+        self,
+        week_offset: int = 0,
+        frequency: str = 'weekly',
+        format_type: str = 'html',
+        sections: Dict[str, bool] = None
+    ) -> Optional[Dict]:
         """
         Generate a weekly newsletter covering the previous week's aviation industry developments
 
         Args:
             week_offset: Number of weeks back to generate (0 = last week, 1 = 2 weeks ago, etc.)
+            frequency: Newsletter frequency ('weekly', 'monthly' - future)
+            format_type: Output format ('html', 'pdf', 'both')
+            sections: Dict of section flags (executive_summary, market_indicators, etc.)
 
         Returns:
             Dictionary with newsletter data or None if generation failed
         """
+        if sections is None:
+            sections = {
+                'executive_summary': True,
+                'market_indicators': True,
+                'industry_news': True,
+                'risk_analysis': True,
+                'outlook': True
+            }
         try:
             logger.info(f"📰 Generating weekly newsletter (offset: {week_offset})")
 
@@ -179,7 +196,8 @@ class InsightsService:
                 news_articles=news_articles,
                 tsa_data=tsa_data,
                 fred_data=fred_data,
-                previous_newsletter=previous_newsletter
+                previous_newsletter=previous_newsletter,
+                sections=sections
             )
 
             # Generate content using Gemini
@@ -214,6 +232,8 @@ class InsightsService:
                 'articles_analyzed': len(news_articles) if news_articles else 0,
                 'previous_newsletter_id': previous_newsletter.get('id') if previous_newsletter else None,
                 'predictions_from_last_week': predictions_from_last_week,
+                'frequency': frequency,
+                'format': format_type,
                 'metadata': {
                     'tsa_days': len(tsa_data) if tsa_data else 0,
                     'fred_included': fred_data is not None,
@@ -315,9 +335,19 @@ Generate the report now:"""
         news_articles: List[Dict],
         tsa_data: List[Dict],
         fred_data: Optional[Dict],
-        previous_newsletter: Optional[Dict]
+        previous_newsletter: Optional[Dict],
+        sections: Dict[str, bool] = None
     ) -> str:
         """Build comprehensive prompt for weekly newsletter"""
+
+        if sections is None:
+            sections = {
+                'executive_summary': True,
+                'market_indicators': True,
+                'industry_news': True,
+                'risk_analysis': True,
+                'outlook': True
+            }
 
         # Format news articles
         news_summary = self._format_news_articles(news_articles)
@@ -339,6 +369,47 @@ Generate the report now:"""
 - Reference any predictions made last week and verify against this week's data
 """
 
+        # Build sections list based on configuration
+        sections_text = []
+
+        if sections.get('executive_summary', True):
+            sections_text.append("""## Week in Review
+- Engaging opening paragraph summarizing the week
+- Highlight the top 3-5 stories with context
+- Connect related developments""")
+
+        if sections.get('industry_news', True):
+            sections_text.append("""## Industry Spotlight
+- Deep dive into the most significant story of the week
+- Provide expert analysis and implications
+- Include relevant data points""")
+
+        if sections.get('market_indicators', True):
+            sections_text.append("""## By The Numbers
+- Present key statistics from TSA and FRED data
+- Compare to previous periods
+- Identify notable trends
+- Use bullet points and percentages""")
+
+        if sections.get('risk_analysis', True):
+            sections_text.append("""## Ongoing Developments
+- Update on continuing stories from previous weeks
+- Track how situations have evolved
+- Note any predictions that materialized or didn't""")
+
+        if sections.get('outlook', True):
+            sections_text.append("""## Week Ahead
+- Forward-looking analysis
+- Upcoming events or developments to watch
+- Predictions based on current trends
+- Potential market movers
+
+## Bottom Line
+- Concise 2-3 sentence summary
+- Key takeaway for industry professionals""")
+
+        sections_instructions = "\n\n".join(sections_text)
+
         prompt = f"""You are the editor of a premium aviation industry newsletter. Generate an engaging, informative weekly newsletter.
 
 **Newsletter Period**: Week of {week_start.strftime('%B %d, %Y')} to {week_end.strftime('%B %d, %Y')}
@@ -356,36 +427,7 @@ Generate the report now:"""
 **Instructions**:
 Generate a professional newsletter in Markdown format with the following sections:
 
-## Week in Review
-- Engaging opening paragraph summarizing the week
-- Highlight the top 3-5 stories with context
-- Connect related developments
-
-## Industry Spotlight
-- Deep dive into the most significant story of the week
-- Provide expert analysis and implications
-- Include relevant data points
-
-## By The Numbers
-- Present key statistics from TSA and FRED data
-- Compare to previous periods
-- Identify notable trends
-- Use bullet points and percentages
-
-## Ongoing Developments
-- Update on continuing stories from previous weeks
-- Track how situations have evolved
-- Note any predictions that materialized or didn't
-
-## Week Ahead
-- Forward-looking analysis
-- Upcoming events or developments to watch
-- Predictions based on current trends
-- Potential market movers
-
-## Bottom Line
-- Concise 2-3 sentence summary
-- Key takeaway for industry professionals
+{sections_instructions}
 
 **Style Guidelines**:
 - Engaging, newsletter-style writing (not overly formal)

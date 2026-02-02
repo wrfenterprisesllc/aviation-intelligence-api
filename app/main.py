@@ -1078,7 +1078,16 @@ def generate_newsletter():
 
     Request body (optional):
     {
-        "week_offset": 0  # 0 = last week, 1 = 2 weeks ago, etc.
+        "week_offset": 0,  # 0 = last week, 1 = 2 weeks ago, etc.
+        "frequency": "weekly",  # weekly, monthly (future)
+        "format": "html",  # html, pdf, both
+        "sections": {  # Which sections to include
+            "executive_summary": true,
+            "market_indicators": true,
+            "industry_news": true,
+            "risk_analysis": true,
+            "outlook": true
+        }
     }
     """
     start_time = datetime.now()
@@ -1094,10 +1103,24 @@ def generate_newsletter():
         # Get request data
         data = request.get_json() or {}
         week_offset = data.get('week_offset', 0)
+        frequency = data.get('frequency', 'weekly')
+        format_type = data.get('format', 'html')
+        sections = data.get('sections', {
+            'executive_summary': True,
+            'market_indicators': True,
+            'industry_news': True,
+            'risk_analysis': True,
+            'outlook': True
+        })
 
         # Generate newsletter
-        logger.info(f"📰 Generating weekly newsletter (offset: {week_offset})")
-        newsletter = insights_service.generate_weekly_newsletter(week_offset=week_offset)
+        logger.info(f"📰 Generating {frequency} newsletter (offset: {week_offset}, format: {format_type})")
+        newsletter = insights_service.generate_weekly_newsletter(
+            week_offset=week_offset,
+            frequency=frequency,
+            format_type=format_type,
+            sections=sections
+        )
 
         if not newsletter:
             return jsonify({
@@ -1123,7 +1146,9 @@ def generate_newsletter():
                 'articles_analyzed': newsletter['articles_analyzed'],
                 'previous_newsletter_id': newsletter.get('previous_newsletter_id'),
                 'predictions_from_last_week': newsletter.get('predictions_from_last_week'),
-                'metadata': newsletter['metadata']
+                'metadata': newsletter['metadata'],
+                'frequency': newsletter.get('frequency', 'weekly'),
+                'format': newsletter.get('format', 'html')
             },
             'timestamp': datetime.now().isoformat(),
             'response_time_ms': round(response_time, 1)
@@ -1235,6 +1260,65 @@ def get_newsletter(newsletter_id):
 
     except Exception as e:
         logger.error(f"❌ Error in get newsletter endpoint: {e}")
+        return jsonify({
+            'success': False,
+            'error': 'Internal server error',
+            'message': str(e),
+            'timestamp': datetime.now().isoformat()
+        }), 500
+
+@app.route('/api/newsletters', methods=['GET'])
+def get_all_newsletters():
+    """Get all newsletters (for archive page)"""
+    start_time = datetime.now()
+
+    try:
+        if not db_service:
+            return jsonify({
+                'success': False,
+                'error': 'Database service not available',
+                'timestamp': datetime.now().isoformat()
+            }), 503
+
+        # Get optional limit parameter
+        limit = request.args.get('limit', type=int)
+
+        newsletters = db_service.get_all_newsletters(limit=limit)
+
+        if not newsletters:
+            return jsonify({
+                'success': True,
+                'newsletters': [],
+                'count': 0,
+                'timestamp': datetime.now().isoformat()
+            })
+
+        response_time = (datetime.now() - start_time).total_seconds() * 1000
+
+        # Format newsletters for response (metadata only, not full content)
+        formatted_newsletters = []
+        for newsletter in newsletters:
+            formatted_newsletters.append({
+                'id': newsletter['id'],
+                'week_start': newsletter['week_start'].isoformat() if isinstance(newsletter['week_start'], datetime) else newsletter['week_start'],
+                'week_end': newsletter['week_end'].isoformat() if isinstance(newsletter['week_end'], datetime) else newsletter['week_end'],
+                'generated_at': newsletter['generated_at'].isoformat() if isinstance(newsletter['generated_at'], datetime) else newsletter['generated_at'],
+                'articles_analyzed': newsletter['articles_analyzed'],
+                'frequency': newsletter.get('frequency', 'weekly'),
+                'format': newsletter.get('format', 'html'),
+                'metadata': newsletter.get('metadata', {})
+            })
+
+        return jsonify({
+            'success': True,
+            'newsletters': formatted_newsletters,
+            'count': len(formatted_newsletters),
+            'timestamp': datetime.now().isoformat(),
+            'response_time_ms': round(response_time, 1)
+        })
+
+    except Exception as e:
+        logger.error(f"❌ Error in get all newsletters endpoint: {e}")
         return jsonify({
             'success': False,
             'error': 'Internal server error',
