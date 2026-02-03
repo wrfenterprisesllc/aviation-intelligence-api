@@ -58,18 +58,31 @@ class InsightsService:
             start_date = end_date - timedelta(days=days)
 
             # Gather data from database
-            news_articles = self.db.get_news_articles(
-                start_date=start_date.isoformat(),
-                end_date=end_date.isoformat(),
+            news_articles = self.db.get_articles(
+                start_date=start_date,
+                end_date=end_date,
                 limit=100
             )
 
             tsa_data = self.db.get_tsa_data(
-                start_date=start_date.strftime('%Y-%m-%d'),
-                end_date=end_date.strftime('%Y-%m-%d')
+                start_date=start_date,
+                end_date=end_date
             )
 
-            fred_data = self.db.get_latest_fred_data()
+            fred_records = self.db.get_fred_data(limit=1)
+            fred_data = {'data': fred_records[0]} if fred_records else None
+
+            # Log data availability for debugging
+            if not news_articles:
+                logger.warning(f"⚠️ No news articles found for {subject} from {start_date.date()} to {end_date.date()}")
+            if not tsa_data:
+                logger.warning(f"⚠️ No TSA data found from {start_date.date()} to {end_date.date()}")
+            if not fred_data:
+                logger.warning(f"⚠️ No FRED data available")
+
+            logger.info(f"📊 Data collected for {subject}: {len(news_articles) if news_articles else 0} articles, "
+                       f"{len(tsa_data) if tsa_data else 0} TSA records, "
+                       f"FRED: {'Yes' if fred_data else 'No'}")
 
             # Build comprehensive prompt
             prompt = self._build_report_prompt(
