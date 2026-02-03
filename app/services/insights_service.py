@@ -214,7 +214,7 @@ class InsightsService:
             )
 
             # Parse sections from markdown
-            sections = self._parse_sections(markdown_content)
+            parsed_sections = self._parse_sections(markdown_content)
 
             # Extract predictions from last week if available
             predictions_from_last_week = None
@@ -228,7 +228,7 @@ class InsightsService:
                 'generated_at': datetime.now(),
                 'markdown_content': markdown_content,
                 'html_content': html_content,
-                'sections': sections,
+                'sections': parsed_sections,
                 'articles_analyzed': len(news_articles) if news_articles else 0,
                 'previous_newsletter_id': previous_newsletter.get('id') if previous_newsletter else None,
                 'predictions_from_last_week': predictions_from_last_week,
