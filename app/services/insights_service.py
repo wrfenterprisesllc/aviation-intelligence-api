@@ -15,16 +15,20 @@ logger = logging.getLogger(__name__)
 class InsightsService:
     """Service for generating AI-powered insights, reports, and newsletters"""
 
-    def __init__(self, gemini_service, database_service):
+    def __init__(self, gemini_service, database_service, stock_service=None, sec_service=None):
         """
         Initialize insights service
 
         Args:
             gemini_service: GeminiService instance for AI generation
             database_service: DatabaseService instance for data retrieval
+            stock_service: StockDataService instance for stock data (optional)
+            sec_service: SECFilingsService instance for SEC filings (optional)
         """
         self.gemini = gemini_service
         self.db = database_service
+        self.stock_service = stock_service
+        self.sec_service = sec_service
         logger.info("✅ Insights service initialized")
 
     def generate_airline_report(
@@ -102,6 +106,24 @@ class InsightsService:
             fred_records = self.db.get_fred_data(limit=1)
             fred_data = {'data': fred_records[0]} if fred_records else None
 
+            # Get stock data if service is available and this is an airline report
+            stock_data = None
+            if self.stock_service and report_type == 'airline':
+                stock_data = self.stock_service.get_stock_data(
+                    airline_name=subject,
+                    period='1mo',
+                    include_history=True
+                )
+
+            # Get SEC filings if service is available and this is an airline report
+            sec_filings = None
+            if self.sec_service and report_type == 'airline':
+                sec_filings = self.sec_service.get_recent_filings(
+                    airline_name=subject,
+                    filing_types=['10-K', '10-Q', '8-K'],
+                    max_results=5
+                )
+
             # Log data availability for debugging
             if not news_articles:
                 logger.warning(f"⚠️ No news articles found for {subject} from {start_date.date()} to {end_date.date()}")
@@ -109,10 +131,16 @@ class InsightsService:
                 logger.warning(f"⚠️ No TSA data found from {start_date.date()} to {end_date.date()}")
             if not fred_data:
                 logger.warning(f"⚠️ No FRED data available")
+            if report_type == 'airline' and not stock_data:
+                logger.warning(f"⚠️ No stock data available for {subject}")
+            if report_type == 'airline' and not sec_filings:
+                logger.warning(f"⚠️ No SEC filings available for {subject}")
 
             logger.info(f"📊 Data collected for {subject}: {len(news_articles) if news_articles else 0} articles, "
                        f"{len(tsa_data) if tsa_data else 0} TSA records, "
-                       f"FRED: {'Yes' if fred_data else 'No'}")
+                       f"FRED: {'Yes' if fred_data else 'No'}, "
+                       f"Stock: {'Yes' if stock_data else 'No'}, "
+                       f"SEC: {'Yes' if sec_filings else 'No'}")
 
             # Build comprehensive prompt
             prompt = self._build_report_prompt(
@@ -121,6 +149,8 @@ class InsightsService:
                 news_articles=news_articles,
                 tsa_data=tsa_data,
                 fred_data=fred_data,
+                stock_data=stock_data,
+                sec_filings=sec_filings,
                 period_start=start_date,
                 period_end=end_date
             )
@@ -158,6 +188,8 @@ class InsightsService:
                     'articles_analyzed': len(news_articles) if news_articles else 0,
                     'tsa_days': len(tsa_data) if tsa_data else 0,
                     'fred_included': fred_data is not None,
+                    'stock_included': stock_data is not None,
+                    'sec_filings_included': sec_filings is not None,
                     'model': 'gemini-2.0-flash-exp'
                 },
                 'cached_until': cached_until
@@ -316,8 +348,10 @@ class InsightsService:
         news_articles: List[Dict],
         tsa_data: List[Dict],
         fred_data: Optional[Dict],
-        period_start: datetime,
-        period_end: datetime
+        stock_data: Optional[Dict] = None,
+        sec_filings: Optional[Dict] = None,
+        period_start: datetime = None,
+        period_end: datetime = None
     ) -> str:
         """Build comprehensive prompt for airline/sector report"""
 
@@ -330,11 +364,17 @@ class InsightsService:
         # Format FRED data
         fred_summary = self._format_fred_data(fred_data)
 
+        # Format stock data
+        stock_summary = self._format_stock_data(stock_data)
+
+        # Format SEC filings
+        sec_summary = self._format_sec_filings(sec_filings)
+
         prompt = f"""You are an expert aviation industry analyst. Generate a comprehensive intelligence report about {subject}.
 
 **Report Type**: {report_type.title()}
 **Subject**: {subject}
-**Period**: {period_start.strftime('%B %d, %Y')} to {period_end.strftime('%B %d, %Y')}
+**Period**: {period_start.strftime('%B %d, %Y') if period_start else 'Recent'} to {period_end.strftime('%B %d, %Y') if period_end else 'Current'}
 
 **Available Data**:
 
@@ -344,34 +384,47 @@ class InsightsService:
 
 {fred_summary}
 
+{stock_summary}
+
+{sec_summary}
+
 **Instructions**:
 Generate a professional, data-driven report in Markdown format with the following sections:
 
 ## Executive Summary
 - 2-3 paragraph overview of key findings
 - Highlight most significant developments
+- Include stock performance summary if available
 
 ## News Analysis
 - Analyze major news stories and their implications
 - Identify trends and patterns
 - Quote specific articles when relevant
 
+## Financial Performance
+- Analyze stock price performance and volatility (if available)
+- Review recent SEC filings and their implications (if available)
+- Compare performance to sector benchmarks
+
 ## Market Data Insights
 - Analyze TSA passenger data trends
 - Interpret credit spread data and financial conditions
-- Connect market data to news developments
+- Connect market data to news developments and stock performance
 
 ## Key Developments
 - List and analyze the most important events
+- Include recent SEC filings (10-K, 10-Q, 8-K)
 - Provide context and industry implications
 
 ## Risk Assessment
 - Identify potential risks and challenges
+- Consider financial metrics and stock volatility
 - Rate overall risk level (Low/Moderate/High)
 
 ## Outlook & Recommendations
 - Forward-looking analysis
-- Strategic recommendations based on data
+- Strategic recommendations based on all available data
+- Investment positioning considerations
 
 **Style Guidelines**:
 - Professional, analytical tone
@@ -601,6 +654,63 @@ Generate the newsletter now:"""
 - Risk Level: {risk_level}
 - Trend: {trend}
 """
+
+        return formatted
+
+    def _format_stock_data(self, stock_data: Optional[Dict]) -> str:
+        """Format stock data for prompt inclusion"""
+        if not stock_data:
+            return "**Stock Data**: Not available."
+
+        ticker = stock_data.get('ticker', 'N/A')
+        current_price = stock_data.get('current_price')
+        day_change_pct = stock_data.get('day_change_percent')
+        performance = stock_data.get('performance', {})
+
+        day_change_str = f"{day_change_pct:+.2f}%" if day_change_pct else "N/A"
+
+        formatted = f"""**Stock Data** ({ticker}):
+- Current Price: ${current_price:.2f} USD
+- Day Change: {day_change_str}
+- Market Cap: ${stock_data.get('market_cap', 0):,.0f}
+- P/E Ratio: {stock_data.get('pe_ratio', 'N/A')}
+- 52-Week High: ${stock_data.get('fifty_two_week_high', 'N/A')}
+- 52-Week Low: ${stock_data.get('fifty_two_week_low', 'N/A')}
+- Beta: {stock_data.get('beta', 'N/A')}
+"""
+
+        # Add performance metrics if available
+        if performance:
+            formatted += f"""
+**Recent Performance** ({performance.get('days_analyzed', 30)} days):
+- Period Return: {performance.get('period_return_pct', 'N/A'):+.2f}%
+- Period High: ${performance.get('period_high', 'N/A')}
+- Period Low: ${performance.get('period_low', 'N/A')}
+- Volatility: {performance.get('volatility_pct', 'N/A'):.2f}%
+"""
+
+        return formatted
+
+    def _format_sec_filings(self, sec_filings: Optional[Dict]) -> str:
+        """Format SEC filings for prompt inclusion"""
+        if not sec_filings or not sec_filings.get('filings'):
+            return "**SEC Filings**: Not available."
+
+        filings = sec_filings.get('filings', [])
+        company_name = sec_filings.get('company_name', 'Unknown')
+
+        formatted = f"""**Recent SEC Filings** ({company_name}):
+
+"""
+
+        for filing in filings[:5]:  # Limit to 5 most recent
+            filing_type = filing.get('filing_type', 'Unknown')
+            filing_date = filing.get('filing_date', 'Unknown')
+            description = filing.get('description', 'No description')
+
+            formatted += f"- **{filing_type}** (Filed: {filing_date})\n"
+            if description:
+                formatted += f"  {description}\n"
 
         return formatted
 

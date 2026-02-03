@@ -62,13 +62,26 @@ except Exception as e:
 try:
     from app.services.gemini_service import GeminiService
     from app.services.insights_service import InsightsService
+    from app.services.stock_data_service import StockDataService
+    from app.services.sec_filings_service import SECFilingsService
+
     gemini_service = GeminiService()
-    insights_service = InsightsService(gemini_service=gemini_service, database_service=db_service)
-    logger.info("✅ Gemini and Insights services initialized")
+    stock_service = StockDataService()
+    sec_service = SECFilingsService()
+
+    insights_service = InsightsService(
+        gemini_service=gemini_service,
+        database_service=db_service,
+        stock_service=stock_service,
+        sec_service=sec_service
+    )
+    logger.info("✅ Gemini, Stock, SEC, and Insights services initialized")
 except Exception as e:
     logger.warning(f"⚠️ Gemini/Insights service initialization failed: {e}")
     gemini_service = None
     insights_service = None
+    stock_service = None
+    sec_service = None
 
 @app.before_request
 def before_request():
