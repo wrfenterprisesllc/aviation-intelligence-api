@@ -57,12 +57,42 @@ class InsightsService:
             end_date = datetime.now()
             start_date = end_date - timedelta(days=days)
 
-            # Gather data from database
-            news_articles = self.db.get_articles(
+            # Gather data from database with smart filtering
+            # Use hybrid approach: airline-specific + industry-wide articles
+            airline_keywords = self._extract_airline_keywords(subject)
+
+            # Get airline-specific articles (70% of total)
+            airline_articles = self.db.get_articles(
                 start_date=start_date,
                 end_date=end_date,
-                limit=100
+                keywords=airline_keywords,
+                limit=70
             )
+
+            # Get industry-wide articles (30% of total)
+            industry_articles = self.db.get_articles(
+                start_date=start_date,
+                end_date=end_date,
+                limit=30
+            )
+
+            # Combine and deduplicate articles
+            seen_ids = set()
+            news_articles = []
+
+            # Prioritize airline-specific articles
+            for article in (airline_articles or []):
+                article_id = article.get('id') or article.get('title')
+                if article_id not in seen_ids:
+                    seen_ids.add(article_id)
+                    news_articles.append(article)
+
+            # Add industry-wide articles
+            for article in (industry_articles or []):
+                article_id = article.get('id') or article.get('title')
+                if article_id not in seen_ids:
+                    seen_ids.add(article_id)
+                    news_articles.append(article)
 
             tsa_data = self.db.get_tsa_data(
                 start_date=start_date,
@@ -467,6 +497,48 @@ Generate a professional newsletter in Markdown format with the following section
 Generate the newsletter now:"""
 
         return prompt
+
+    def _extract_airline_keywords(self, subject: str) -> List[str]:
+        """
+        Extract airline name variations and ticker symbols for filtering
+
+        Args:
+            subject: Airline name or subject string
+
+        Returns:
+            List of keyword variations (full name, short name, ticker symbols)
+        """
+        # Comprehensive airline keyword mapping
+        airline_map = {
+            'United Airlines': ['United Airlines', 'United', 'UAL', 'UA'],
+            'Delta Air Lines': ['Delta Air Lines', 'Delta', 'DAL', 'DL'],
+            'American Airlines': ['American Airlines', 'American', 'AAL', 'AA'],
+            'Southwest Airlines': ['Southwest Airlines', 'Southwest', 'LUV', 'WN'],
+            'JetBlue Airways': ['JetBlue Airways', 'JetBlue', 'JBLU', 'B6'],
+            'Alaska Airlines': ['Alaska Airlines', 'Alaska', 'ALK', 'AS'],
+            'Spirit Airlines': ['Spirit Airlines', 'Spirit', 'SAVE', 'NK'],
+            'Frontier Airlines': ['Frontier Airlines', 'Frontier', 'ULCC', 'F9'],
+            'Hawaiian Airlines': ['Hawaiian Airlines', 'Hawaiian', 'HA'],
+            'Allegiant Air': ['Allegiant Air', 'Allegiant', 'ALGT', 'G4'],
+            'Sun Country': ['Sun Country', 'Sun Country Airlines', 'SNCY', 'SY']
+        }
+
+        # Try to find exact match or partial match
+        for full_name, keywords in airline_map.items():
+            if subject in full_name or full_name in subject:
+                logger.info(f"📍 Matched '{subject}' to airline keywords: {keywords}")
+                return keywords
+
+        # Fallback: generate generic keywords from subject
+        fallback_keywords = [
+            subject,
+            subject.replace(' Airlines', ''),
+            subject.replace(' Airways', ''),
+            subject.replace(' Air', '')
+        ]
+
+        logger.info(f"📍 Using fallback keywords for '{subject}': {fallback_keywords}")
+        return fallback_keywords
 
     def _format_news_articles(self, articles: List[Dict]) -> str:
         """Format news articles for prompt inclusion"""

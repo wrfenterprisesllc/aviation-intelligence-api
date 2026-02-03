@@ -86,6 +86,7 @@ class DatabaseService:
         self,
         source: Optional[str] = None,
         tags: Optional[List[str]] = None,
+        keywords: Optional[List[str]] = None,
         start_date: Optional[datetime] = None,
         end_date: Optional[datetime] = None,
         limit: int = 50,
@@ -97,6 +98,7 @@ class DatabaseService:
         Args:
             source: Filter by source (e.g., 'newsapi', 'rss_feed')
             tags: Filter by tags (articles must have any of these tags)
+            keywords: Filter by keywords in title or summary (case-insensitive)
             start_date: Filter articles published after this date
             end_date: Filter articles published before this date
             limit: Maximum number of articles to return
@@ -145,6 +147,16 @@ class DatabaseService:
                 if tags:
                     article_tags = article_data.get('tags', [])
                     if not any(tag in article_tags for tag in tags):
+                        continue
+
+                # Client-side keyword filtering (case-insensitive search in title and summary)
+                if keywords:
+                    title = article_data.get('title', '').lower()
+                    summary = article_data.get('summary', '').lower()
+                    combined_text = f"{title} {summary}"
+
+                    # Check if any keyword appears in title or summary
+                    if not any(keyword.lower() in combined_text for keyword in keywords):
                         continue
 
                 articles.append(article_data)
