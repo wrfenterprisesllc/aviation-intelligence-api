@@ -1084,6 +1084,74 @@ def get_report(report_id):
             'timestamp': datetime.now().isoformat()
         }), 500
 
+@app.route('/api/reports', methods=['GET'])
+def list_reports():
+    """
+    List all airline reports with optional filtering
+
+    Query parameters:
+        subject: Filter by airline name (optional)
+        limit: Maximum number of reports to return (default: 50)
+        offset: Number of reports to skip (default: 0)
+    """
+    start_time = datetime.now()
+
+    try:
+        if not db_service:
+            return jsonify({
+                'success': False,
+                'error': 'Database service not available',
+                'timestamp': datetime.now().isoformat()
+            }), 503
+
+        # Get query parameters
+        subject = request.args.get('subject')
+        limit = int(request.args.get('limit', 50))
+        offset = int(request.args.get('offset', 0))
+
+        # Get reports from database
+        reports = db_service.get_airline_reports(
+            subject=subject,
+            limit=limit,
+            offset=offset
+        )
+
+        # Format reports for response
+        formatted_reports = []
+        for report in reports:
+            formatted_reports.append({
+                'id': report.get('id'),
+                'report_type': report.get('report_type'),
+                'subject': report.get('subject'),
+                'generated_at': report['generated_at'].isoformat() if isinstance(report['generated_at'], datetime) else report['generated_at'],
+                'period_start': report['period_start'].isoformat() if isinstance(report['period_start'], datetime) else report['period_start'],
+                'period_end': report['period_end'].isoformat() if isinstance(report['period_end'], datetime) else report['period_end'],
+                'articles_analyzed': report.get('metadata', {}).get('articles_analyzed', 0),
+                'cached_until': report['cached_until'].isoformat() if isinstance(report.get('cached_until'), datetime) else report.get('cached_until')
+            })
+
+        response_time = (datetime.now() - start_time).total_seconds() * 1000
+
+        return jsonify({
+            'success': True,
+            'reports': formatted_reports,
+            'count': len(formatted_reports),
+            'subject_filter': subject,
+            'limit': limit,
+            'offset': offset,
+            'timestamp': datetime.now().isoformat(),
+            'response_time_ms': round(response_time, 1)
+        })
+
+    except Exception as e:
+        logger.error(f"❌ Error in list reports endpoint: {e}")
+        return jsonify({
+            'success': False,
+            'error': 'Internal server error',
+            'message': str(e),
+            'timestamp': datetime.now().isoformat()
+        }), 500
+
 @app.route('/api/newsletter/generate', methods=['POST'])
 @require_api_key
 def generate_newsletter():

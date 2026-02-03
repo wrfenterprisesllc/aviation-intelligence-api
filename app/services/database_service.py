@@ -644,6 +644,65 @@ class DatabaseService:
             self.logger.error(f"Error fetching airline report: {e}")
             return None
 
+    def get_airline_reports(
+        self,
+        subject: Optional[str] = None,
+        report_type: Optional[str] = None,
+        limit: int = 50,
+        offset: int = 0
+    ) -> List[Dict[str, Any]]:
+        """
+        Query multiple airline reports with optional filtering
+
+        Args:
+            subject: Filter by airline name/sector (optional)
+            report_type: Filter by report type ('airline' or 'sector') (optional)
+            limit: Maximum number of reports to return
+            offset: Number of reports to skip
+
+        Returns:
+            List of report dictionaries
+        """
+        try:
+            query = self.db.collection('airline_reports')
+
+            # Apply filters
+            if subject:
+                query = query.where(filter=FieldFilter('subject', '==', subject))
+
+            if report_type:
+                query = query.where(filter=FieldFilter('report_type', '==', report_type))
+
+            # Order by generated date (newest first)
+            query = query.order_by('generated_at', direction=firestore.Query.DESCENDING)
+
+            # Apply pagination
+            if offset > 0:
+                query = query.offset(offset)
+            query = query.limit(limit)
+
+            # Execute query
+            docs = query.stream()
+
+            reports = []
+            for doc in docs:
+                report_data = doc.to_dict()
+                report_data['id'] = doc.id
+
+                # Convert timestamps
+                for field in ['generated_at', 'period_start', 'period_end', 'cached_until']:
+                    if field in report_data and hasattr(report_data[field], 'timestamp'):
+                        report_data[field] = report_data[field].replace(tzinfo=None)
+
+                reports.append(report_data)
+
+            self.logger.info(f"Retrieved {len(reports)} airline reports")
+            return reports
+
+        except Exception as e:
+            self.logger.error(f"Error querying airline reports: {e}")
+            return []
+
     def get_cached_report(self, subject: str, report_type: str) -> Optional[Dict[str, Any]]:
         """
         Get a cached report for a subject if still valid
