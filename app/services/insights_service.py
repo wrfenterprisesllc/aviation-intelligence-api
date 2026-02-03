@@ -6,10 +6,14 @@ Generates airline/industry reports and weekly newsletters using Gemini AI
 
 import logging
 import markdown
+import pytz
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
+
+# Use Eastern Time for all date operations (TSA and aviation industry uses ET)
+EASTERN_TZ = pytz.timezone('US/Eastern')
 
 
 class InsightsService:
@@ -57,8 +61,8 @@ class InsightsService:
                 logger.info(f"✅ Using cached report for {subject}")
                 return cached_report
 
-            # Calculate date range
-            end_date = datetime.now()
+            # Calculate date range using Eastern Time (aviation industry standard)
+            end_date = datetime.now(EASTERN_TZ).replace(tzinfo=None)
             start_date = end_date - timedelta(days=days)
 
             # Gather data from database with smart filtering
@@ -268,14 +272,14 @@ class InsightsService:
         try:
             logger.info(f"📰 Generating weekly newsletter (offset: {week_offset})")
 
-            # Calculate week boundaries (Monday to Sunday)
-            today = datetime.now()
+            # Calculate week boundaries (Monday to Sunday) using Eastern Time
+            today = datetime.now(EASTERN_TZ)
             days_since_monday = today.weekday()
             last_monday = today - timedelta(days=days_since_monday + 7 + (week_offset * 7))
             last_sunday = last_monday + timedelta(days=6)
 
-            week_start = last_monday.replace(hour=0, minute=0, second=0, microsecond=0)
-            week_end = last_sunday.replace(hour=23, minute=59, second=59, microsecond=999999)
+            week_start = last_monday.replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=None)
+            week_end = last_sunday.replace(hour=23, minute=59, second=59, microsecond=999999, tzinfo=None)
 
             logger.info(f"📅 Newsletter period: {week_start.date()} to {week_end.date()}")
 
@@ -1355,8 +1359,8 @@ Catalysts:"""
             Dictionary with market metrics, news headlines, and risk factors
         """
         try:
-            # Get recent news articles (last 7 days)
-            start_date = datetime.now() - timedelta(days=7)
+            # Get recent news articles (last 7 days) using Eastern Time
+            start_date = datetime.now(EASTERN_TZ).replace(tzinfo=None) - timedelta(days=7)
             recent_news = self.db.get_articles(
                 start_date=start_date,
                 limit=10

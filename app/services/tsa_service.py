@@ -7,12 +7,16 @@ Scrapes current passenger throughput data from TSA.gov
 import requests
 import json
 import re
+import pytz
 from datetime import datetime, timedelta
 from typing import List, Dict, Any
 from bs4 import BeautifulSoup
 import logging
 
 logger = logging.getLogger(__name__)
+
+# Use Eastern Time for TSA data (TSA operates in ET)
+EASTERN_TZ = pytz.timezone('US/Eastern')
 
 class TSADataService:
     """Real-time TSA passenger data scraper with Firestore persistence"""
@@ -108,10 +112,10 @@ class TSADataService:
                 except:
                     continue
             
-            # Fallback to today
-            return datetime.now().strftime('%Y-%m-%d')
+            # Fallback to today in Eastern Time
+            return datetime.now(EASTERN_TZ).strftime('%Y-%m-%d')
         except:
-            return datetime.now().strftime('%Y-%m-%d')
+            return datetime.now(EASTERN_TZ).strftime('%Y-%m-%d')
     
     def _calculate_2019_comparison(self, current_throughput):
         """Calculate comparison to 2019 baseline"""
@@ -139,7 +143,7 @@ class TSADataService:
     
     def _get_fallback_data(self):
         """High-quality fallback data when scraping fails"""
-        current_date = datetime.now()
+        current_date = datetime.now(EASTERN_TZ)
         
         # Realistic modeling based on seasonal patterns
         base_throughput = 2100000
@@ -206,7 +210,7 @@ class TSADataService:
 
         try:
             from datetime import datetime, timedelta
-            start_date = datetime.now() - timedelta(days=days)
+            start_date = datetime.now(EASTERN_TZ).replace(tzinfo=None) - timedelta(days=days)
 
             # Get data from database service
             tsa_records = self.db_service.get_tsa_data(
