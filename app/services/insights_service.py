@@ -142,18 +142,50 @@ class InsightsService:
                        f"Stock: {'Yes' if stock_data else 'No'}, "
                        f"SEC: {'Yes' if sec_filings else 'No'}")
 
-            # Build comprehensive prompt
-            prompt = self._build_report_prompt(
-                subject=subject,
-                report_type=report_type,
-                news_articles=news_articles,
-                tsa_data=tsa_data,
-                fred_data=fred_data,
-                stock_data=stock_data,
-                sec_filings=sec_filings,
-                period_start=start_date,
-                period_end=end_date
-            )
+            # Build prompt based on report type
+            if report_type == 'credit_analysis':
+                prompt = self._build_credit_analysis_prompt(
+                    subject=subject,
+                    news_articles=news_articles,
+                    tsa_data=tsa_data,
+                    fred_data=fred_data,
+                    stock_data=stock_data,
+                    sec_filings=sec_filings,
+                    period_start=start_date,
+                    period_end=end_date
+                )
+            elif report_type == 'leasing_recommendation':
+                prompt = self._build_leasing_recommendation_prompt(
+                    subject=subject,
+                    news_articles=news_articles,
+                    stock_data=stock_data,
+                    period_start=start_date,
+                    period_end=end_date
+                )
+            elif report_type == 'comprehensive':
+                prompt = self._build_comprehensive_report_prompt(
+                    subject=subject,
+                    news_articles=news_articles,
+                    tsa_data=tsa_data,
+                    fred_data=fred_data,
+                    stock_data=stock_data,
+                    sec_filings=sec_filings,
+                    period_start=start_date,
+                    period_end=end_date
+                )
+            else:
+                # Default for 'airline' or 'sector'
+                prompt = self._build_report_prompt(
+                    subject=subject,
+                    report_type=report_type,
+                    news_articles=news_articles,
+                    tsa_data=tsa_data,
+                    fred_data=fred_data,
+                    stock_data=stock_data,
+                    sec_filings=sec_filings,
+                    period_start=start_date,
+                    period_end=end_date
+                )
 
             # Generate content using Gemini
             markdown_content = self.gemini.generate_content(prompt, temperature=0.7)
@@ -435,6 +467,265 @@ Generate a professional, data-driven report in Markdown format with the followin
 - Use markdown formatting (headers, lists, bold, etc.)
 
 Generate the report now:"""
+
+        return prompt
+
+    def _build_credit_analysis_prompt(
+        self,
+        subject: str,
+        news_articles: List[Dict],
+        tsa_data: List[Dict],
+        fred_data: Optional[Dict],
+        stock_data: Optional[Dict],
+        sec_filings: Optional[Dict],
+        period_start: datetime,
+        period_end: datetime
+    ) -> str:
+        """Build specialized credit analysis prompt from lender/bondholder perspective"""
+
+        # Format data sources
+        news_summary = self._format_news_articles(news_articles)
+        tsa_summary = self._format_tsa_data(tsa_data)
+        fred_summary = self._format_fred_data(fred_data)
+        stock_summary = self._format_stock_data(stock_data)
+        sec_summary = self._format_sec_filings(sec_filings)
+
+        prompt = f"""You are a senior airline credit analyst. Generate a comprehensive credit analysis report for {subject} covering {period_start.strftime('%B %d, %Y')} to {period_end.strftime('%B %d, %Y')}.
+
+**Perspective**: Analyze from a lender/bondholder perspective, focusing on creditworthiness and financial risk.
+
+**Available Data**:
+
+{news_summary}
+
+{tsa_summary}
+
+{fred_summary}
+
+{stock_summary}
+
+{sec_summary}
+
+**Required Report Sections** (use these exact H2 headers):
+
+## Executive Summary
+Provide a 3-4 paragraph overview of the credit profile, key risks, and rating outlook.
+
+## Credit Rating & Spread Analysis
+- Current credit rating and recent changes
+- Bond spread trends vs. industry benchmarks
+- Comparison to FRED credit spread data
+- Risk premium assessment
+
+## Financial Health Metrics
+- Debt-to-EBITDA ratio trends
+- Liquidity position (cash, available credit)
+- Interest coverage ratios
+- Free cash flow analysis
+- Leverage metrics
+
+## Revenue & Profitability Trends
+- Revenue trends from TSA data and financial statements
+- Operating margin analysis
+- Unit revenue (RASM) performance
+- Cost structure efficiency
+
+## Risk Assessment
+- Operational risks (labor, fuel, competition)
+- Market risks (economic downturn, demand shocks)
+- Regulatory and legal risks
+- Covenant compliance status
+- **Risk Level: High/Medium/Low** (use this exact format)
+
+## Credit Outlook & Recommendation
+- 12-month credit outlook
+- Probability of rating changes
+- Recommendation for bondholders/lenders
+- Key metrics to monitor
+
+**Formatting Requirements**:
+- Use markdown formatting
+- Include specific data points and percentages where available
+- Use bullet points for clarity
+- Highlight risk levels using: **Risk Level: High/Medium/Low**
+- Include specific metrics and numbers from the data provided
+- Be analytical and data-driven
+
+Generate the credit analysis report now:"""
+
+        return prompt
+
+    def _build_leasing_recommendation_prompt(
+        self,
+        subject: str,
+        news_articles: List[Dict],
+        stock_data: Optional[Dict],
+        period_start: datetime,
+        period_end: datetime
+    ) -> str:
+        """Build specialized leasing recommendation prompt from aircraft lessor perspective"""
+
+        # Format data sources
+        news_summary = self._format_news_articles(news_articles)
+        stock_summary = self._format_stock_data(stock_data)
+
+        prompt = f"""You are a senior aircraft leasing analyst. Generate a comprehensive leasing recommendation report for {subject} covering {period_start.strftime('%B %d, %Y')} to {period_end.strftime('%B %d, %Y')}.
+
+**Perspective**: Analyze from an aircraft lessor perspective, focusing on lease rates, fleet strategy, and market conditions.
+
+**Available Data**:
+
+{news_summary}
+
+{stock_summary}
+
+**Note**: Since proprietary lease rate databases are not available, provide qualitative analysis based on industry trends, news reports, and financial data.
+
+**Required Report Sections** (use these exact H2 headers):
+
+## Executive Summary
+Provide a 3-4 paragraph overview of the airline's attractiveness as a lessee, key opportunities, and risks.
+
+## Fleet Composition & Strategy
+- Current fleet breakdown (aircraft types, ages) based on news and public data
+- Recent aircraft orders and deliveries
+- Fleet modernization initiatives
+- Narrowbody vs. widebody mix
+
+## Market Conditions & Lease Rate Trends
+- Current lease rate environment for key aircraft types
+- Supply/demand dynamics in aircraft leasing market
+- Industry-wide trends affecting lease rates
+- Airline's historical lease vs. own strategy
+
+## Lessee Credit Profile
+- Financial stability as a lessee
+- On-time lease payment history (based on news/reports)
+- Debt levels and ability to meet obligations
+- Stock performance trends
+
+## Route Network & Capacity Trends
+- Network expansion or contraction
+- Utilization rates and productivity
+- International vs. domestic exposure
+- Competitive position in key markets
+
+## Leasing Recommendation
+- **Recommendation**: Favorable / Neutral / Cautious (use this exact format)
+- Preferred aircraft types to lease to this airline
+- Recommended lease structure (operating vs. finance)
+- Suggested lease terms and conditions
+- Key risk mitigations
+- **Risk Level: High/Medium/Low** (use this exact format)
+
+**Formatting Requirements**:
+- Use markdown formatting
+- Include specific fleet data where available
+- Use bullet points for clarity
+- Highlight risk levels using: **Risk Level: High/Medium/Low**
+- Provide actionable recommendations
+- Be practical and market-focused
+
+Generate the leasing recommendation report now:"""
+
+        return prompt
+
+    def _build_comprehensive_report_prompt(
+        self,
+        subject: str,
+        news_articles: List[Dict],
+        tsa_data: List[Dict],
+        fred_data: Optional[Dict],
+        stock_data: Optional[Dict],
+        sec_filings: Optional[Dict],
+        period_start: datetime,
+        period_end: datetime
+    ) -> str:
+        """Build comprehensive report combining credit, leasing, and market analysis"""
+
+        # Format data sources
+        news_summary = self._format_news_articles(news_articles)
+        tsa_summary = self._format_tsa_data(tsa_data)
+        fred_summary = self._format_fred_data(fred_data)
+        stock_summary = self._format_stock_data(stock_data)
+        sec_summary = self._format_sec_filings(sec_filings)
+
+        prompt = f"""You are a senior aviation intelligence analyst. Generate a comprehensive multi-perspective report for {subject} covering {period_start.strftime('%B %d, %Y')} to {period_end.strftime('%B %d, %Y')}.
+
+**Perspective**: Provide integrated analysis from three perspectives: credit/bondholder, aircraft lessor, and market analyst.
+
+**Available Data**:
+
+{news_summary}
+
+{tsa_summary}
+
+{fred_summary}
+
+{stock_summary}
+
+{sec_summary}
+
+**Required Report Sections** (use these exact H2 headers):
+
+## Executive Summary
+Provide a 4-5 paragraph overview integrating credit, leasing, and market perspectives.
+
+## Credit Analysis
+### Credit Rating & Financial Health
+- Credit rating trends and bond spreads
+- Key financial metrics (leverage, liquidity, profitability)
+- Debt structure and covenant compliance
+
+### Credit Risk Assessment
+- Operational and market risks
+- 12-month credit outlook
+- **Credit Risk Level: High/Medium/Low** (use this exact format)
+
+## Leasing Analysis
+### Fleet Strategy & Composition
+- Current fleet breakdown and modernization plans
+- Recent orders and lease commitments
+- Fleet age and efficiency
+
+### Lessee Attractiveness
+- Financial stability as a lessee
+- Lease vs. own strategy
+- Recommended aircraft types and lease structures
+- **Leasing Risk Level: High/Medium/Low** (use this exact format)
+
+## Market & Operational Analysis
+### Revenue & Capacity Trends
+- TSA passenger data trends
+- Load factor and yield performance
+- Route network developments
+
+### Competitive Position
+- Market share in key segments
+- Pricing power and competitive advantages
+- Industry positioning
+
+## Integrated Risk Assessment
+- Combined risk view across credit, leasing, and operational dimensions
+- Interconnected risk factors
+- Scenario analysis (best/base/worst case)
+- **Overall Risk Level: High/Medium/Low** (use this exact format)
+
+## Strategic Recommendations
+- For bondholders/lenders
+- For aircraft lessors
+- For equity investors
+- Key metrics to monitor
+
+**Formatting Requirements**:
+- Use markdown formatting with clear section hierarchy
+- Include specific data points and percentages
+- Use bullet points for clarity
+- Highlight risk levels using: **Risk Level: High/Medium/Low**
+- Integrate perspectives across sections
+- Be comprehensive yet concise
+
+Generate the comprehensive report now:"""
 
         return prompt
 

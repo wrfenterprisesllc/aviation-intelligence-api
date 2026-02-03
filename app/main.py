@@ -977,10 +977,11 @@ def generate_report():
                 'timestamp': datetime.now().isoformat()
             }), 400
 
-        if report_type not in ['airline', 'sector']:
+        VALID_REPORT_TYPES = ['airline', 'sector', 'credit_analysis', 'leasing_recommendation', 'comprehensive']
+        if report_type not in VALID_REPORT_TYPES:
             return jsonify({
                 'success': False,
-                'error': 'report_type must be either "airline" or "sector"',
+                'error': f'report_type must be one of: {", ".join(VALID_REPORT_TYPES)}',
                 'timestamp': datetime.now().isoformat()
             }), 400
 
