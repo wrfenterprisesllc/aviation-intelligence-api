@@ -912,21 +912,23 @@ Generate the newsletter now:"""
 
         formatted = f"**TSA Passenger Screening Data** ({len(tsa_data)} days):\n\n"
 
-        # Calculate aggregates
-        total_current = sum(day.get('current_year', 0) for day in tsa_data)
-        total_previous = sum(day.get('previous_year', 0) for day in tsa_data)
+        # Calculate aggregates - handle both field name formats
+        total_current = sum(day.get('current_throughput', day.get('current_year', 0)) for day in tsa_data)
 
-        if total_previous > 0:
-            yoy_change = ((total_current - total_previous) / total_previous) * 100
-            formatted += f"- Total Passengers: {total_current:,}\n"
-            formatted += f"- Year-over-Year Change: {yoy_change:+.1f}%\n"
-            formatted += f"- Period: {tsa_data[0].get('date')} to {tsa_data[-1].get('date')}\n\n"
+        # Show comparison to 2019 if available
+        avg_comparison = sum(day.get('compared_to_2019', 0) for day in tsa_data if day.get('compared_to_2019')) / len(tsa_data) if tsa_data else 0
 
-        # Show recent days
+        if total_current > 0:
+            formatted += f"- Total Passengers (Period): {total_current:,}\n"
+            if avg_comparison > 0:
+                formatted += f"- Average vs 2019: {avg_comparison:.1f}%\n"
+            formatted += f"- Period: {tsa_data[-1].get('date')} to {tsa_data[0].get('date')}\n\n"
+
+        # Show recent days (last 7 days or all available)
         formatted += "Recent Daily Data:\n"
-        for day in tsa_data[-7:]:  # Last 7 days
+        for day in sorted(tsa_data, key=lambda x: x.get('date', ''), reverse=True)[:7]:
             date = day.get('date', 'Unknown')
-            current = day.get('current_year', 0)
+            current = day.get('current_throughput', day.get('current_year', 0))
             formatted += f"- {date}: {current:,} passengers\n"
 
         return formatted
