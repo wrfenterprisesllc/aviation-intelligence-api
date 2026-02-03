@@ -176,9 +176,9 @@ class InsightsService:
             previous_newsletter = self.db.get_latest_newsletter()
 
             # Gather data from database
-            news_articles = self.db.get_news_articles(
-                start_date=week_start.isoformat(),
-                end_date=week_end.isoformat(),
+            news_articles = self.db.get_articles(
+                start_date=week_start,  # Pass datetime object, not string
+                end_date=week_end,      # Pass datetime object, not string
                 limit=200
             )
 
@@ -187,7 +187,21 @@ class InsightsService:
                 end_date=week_end.strftime('%Y-%m-%d')
             )
 
-            fred_data = self.db.get_latest_fred_data()
+            # get_fred_data() returns List[Dict], but _format_fred_data() expects Dict with 'data' key
+            fred_records = self.db.get_fred_data(limit=1)
+            fred_data = {'data': fred_records[0]} if fred_records else None
+
+            # Log data availability
+            if not news_articles:
+                logger.warning(f"⚠️ No news articles found for week {week_start.date()} to {week_end.date()}")
+            if not tsa_data:
+                logger.warning(f"⚠️ No TSA data found for week {week_start.date()} to {week_end.date()}")
+            if not fred_data:
+                logger.warning(f"⚠️ No FRED data available")
+
+            logger.info(f"📊 Data collected: {len(news_articles) if news_articles else 0} articles, "
+                       f"{len(tsa_data) if tsa_data else 0} TSA records, "
+                       f"FRED: {'Yes' if fred_data else 'No'}")
 
             # Build comprehensive newsletter prompt
             prompt = self._build_newsletter_prompt(

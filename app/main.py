@@ -1155,11 +1155,12 @@ def generate_newsletter():
         })
 
     except Exception as e:
-        logger.error(f"❌ Error in newsletter generation endpoint: {e}")
+        logger.error(f"❌ Error in newsletter generation endpoint: {e}", exc_info=True)
         return jsonify({
             'success': False,
-            'error': 'Internal server error',
-            'message': str(e),
+            'error': str(e),  # Show actual error message
+            'error_type': type(e).__name__,
+            'message': 'Newsletter generation failed',
             'timestamp': datetime.now().isoformat()
         }), 500
 
