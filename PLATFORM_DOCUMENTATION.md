@@ -413,6 +413,90 @@ curl -s "https://aviation-intelligence-api-rmexsuffdq-uc.a.run.app/api/weekly-ou
 - Executive summary: 5-7s (Gemini AI)
 - Catalysts: 10-12s (Gemini AI, but 7-day cache)
 
+## Phase 4: Complete UI Redesign (February 2026)
+
+### Overview
+The platform received a comprehensive UI redesign inspired by Bloomberg Terminal, focusing on a professional dark theme, improved information hierarchy, and modern card-based layouts. The redesign emphasizes scannability, data visualization, and theme consistency across all components.
+
+### Design System
+
+**Color Strategy:**
+- **Dark Theme Default:** Deep navy backgrounds (#080E1A, #0B1222) with slate surfaces (#0D1420, #111927)
+- **CSS Design Tokens:** All colors, spacing, shadows defined as CSS custom properties in `design-tokens.css`
+- **Theme Switching:** `:root` defines dark theme, `[data-theme="light"]` for light mode
+- **Semantic Colors:** Consistent color meanings across platform:
+  - Green (#10B981): Positive metrics, growth
+  - Amber/Red (#F59E0B, #EF4444): Warnings, negative trends
+  - Cyan (#06B6D4): Informational highlights
+  - Blue (#3B82F6): Interactive elements, links
+
+**Typography Hierarchy:**
+- **UI Font:** Outfit for headings and interface elements
+- **Body Font:** Inter for readable body text
+- **Monospace:** JetBrains Mono for data, metrics, timestamps
+
+**Component Library:**
+- **Ticker Chips:** Quick-pick buttons for airline selection (UAL, DAL, AAL, BA)
+- **Recent Report Cards:** Compact clickable cards with ticker badges and metadata
+- **Collapsible Sections:** Accordion-style containers for Weekly Outlook
+- **Theme-Aware Forms:** All inputs, dropdowns, buttons respect theme variables
+- **Market Indicator Cards:** Real-time data with sparkline placeholders
+
+### Key Redesign Elements
+
+**Dashboard Layout:**
+- Side-by-side: Generate Report (left) + Recent Reports (right)
+- Ticker chips replace large demo buttons for cleaner interface
+- Recent reports display as compact cards with onclick handlers
+- LoadReport() functionality to retrieve archived reports from API
+
+**Weekly Outlook Styling:**
+- Collapsible sections with `weekly-outlook.css`
+- Header changed from blue gradient to dark surface with blue accent bar
+- Smaller, more compact sizing throughout
+- Theme-aware text colors and backgrounds
+
+**Form Modernization:**
+- Theme-aware borders using `var(--border)`
+- Background colors using `var(--bg-subtle)`
+- Text colors using `var(--text-primary)`
+- Consistent hover states with `var(--surface-hover)`
+
+**File Changes:**
+- `static/css/design-tokens.css` - Inverted to dark theme default
+- `static/css/components.css` - Added ticker chip styles
+- `static/css/weekly-outlook.css` - New file for collapsible sections
+- `static/css/style.css` - Migrated legacy components to theme variables
+- `templates/dashboard.html` - Side-by-side layout, ticker chips, recent reports UI
+- `templates/weekly_outlook.html` - Updated header styling, smaller compact design
+- `static/js/dashboard.js` - Added loadReport() function for archives
+- `static/js/sparklines.js` - Fixed selector to `.market-indicator-card`
+
+**Browser Cache Note:**
+Users may need hard refresh (Cmd+Shift+R / Ctrl+Shift+R) after deployments to see CSS changes due to aggressive browser caching.
+
+### Multi-Type Airline Reports (January 2026)
+
+The platform now supports four specialized airline report types, each with tailored AI prompts for focused analysis:
+
+**Report Types:**
+1. **General Airline Report** - Comprehensive market overview, operational performance, industry position
+2. **Credit Analysis** - Deep-dive credit assessment with risk factors, debt analysis, financial health
+3. **M&A Analysis** - Merger and acquisition impact, integration challenges, strategic fit assessment
+4. **Fleet Strategy** - Aircraft orders, fleet planning, modernization initiatives, capacity management
+
+**Implementation:**
+- Backend: Specialized Gemini AI prompts in `insights_service.py` for each report type
+- Frontend: Dropdown selector in dashboard report generation form
+- API: `POST /api/reports/generate` accepts `report_type` parameter
+- Archive: `GET /api/reports?subject={ticker}` retrieves all report types for a given airline
+
+**Archive System:**
+- Reports persisted in Firestore `airline_reports` collection
+- Searchable by subject (airline ticker), report type, date range
+- Recent Reports UI on dashboard displays latest reports with metadata
+- Click to load functionality streams archived report from API
+
 ## Weekly Outlook - Real Data Implementation
 
 ### Overview
@@ -620,6 +704,8 @@ Tag-based filtering of news articles for risk categories:
 9. ✅ **Phase 3: Complex Data** - Catalysts to Watch (Gemini AI), Industry Load Factor (TSA-based)
 10. ✅ Fixed missing `Any` type import in InsightsService (critical bug fix)
 11. ✅ Added `get_recent_data()` method to TSADataService
+12. ✅ **Multi-Type Airline Reports** - General, Credit, M&A, Fleet analysis with specialized prompts
+13. ✅ **Reports Archive API** - GET endpoint to retrieve previously generated reports by subject
 
 ### Frontend (aviation-intelligence)
 1. ✅ Restored `dashboard.html` from commit 42f212d
@@ -629,6 +715,14 @@ Tag-based filtering of news articles for risk categories:
 5. ✅ Added server-side fetching for AI insights and risks (main.py)
 6. ✅ Added JavaScript functions for catalysts and load factor updates
 7. ✅ Integrated all 12 Weekly Outlook data points with live/AI-generated data
+8. ✅ **Phase 4: Complete UI Redesign** - Dark theme default, modern card-based layouts
+9. ✅ **Design Token System** - CSS variables for theme-aware components
+10. ✅ **Dashboard Redesign** - Side-by-side Generate Report + Recent Reports layout
+11. ✅ **Ticker Chip Components** - Quick pick buttons for UAL, DAL, AAL, BA
+12. ✅ **Recent Reports UI** - Compact clickable cards with loadReport() functionality
+13. ✅ **Weekly Outlook Collapsible Sections** - New weekly-outlook.css with theme support
+14. ✅ **Theme-Aware Form Controls** - All inputs, dropdowns, cards use CSS variables
+15. ✅ **Fixed Sparklines Selector** - Updated to target .market-indicator-card
 
 ## Key Commits Reference
 
@@ -681,23 +775,28 @@ Tag-based filtering of news articles for risk categories:
 
 ---
 
-**Last Updated:** 2026-02-02
-**Platform Version:** 3.0.0 (Weekly Outlook Real Data - Phase 3 Complete)
+**Last Updated:** 2026-02-04
+**Platform Version:** 4.0.0 (Complete UI Redesign - Phase 4 Complete)
 **Status:** ✅ Production Ready
 
 ## Quick Start for New Sessions
 
 When starting a new chat session, provide this document as context. Key things to know:
 
-1. **All 12 Weekly Outlook data points are now live** - No hardcoded data remains
-2. **Phase 3 just completed** - Catalysts to Watch (Gemini AI) and Industry Load Factor (TSA-based)
-3. **Cloud Run memory is 2GB** - Required for Gemini initialization (was causing SIGKILL errors at 1GB)
-4. **Backend uses Gemini 2.5 Flash** - For cost-effective AI generation (~$0.014/month)
-5. **Risk endpoints return empty arrays** - This is expected; existing articles aren't tagged yet
-6. **7-day cache for catalysts, 24h for other AI insights** - Minimizes API costs
-7. **All endpoints tested and working** - Full test suite provided in Troubleshooting section
+1. **Phase 4 Complete - Full UI Redesign** - Dark theme default, modern card-based layouts with Bloomberg Terminal aesthetic
+2. **All 12 Weekly Outlook data points are live** - No hardcoded data remains
+3. **Multi-type airline reports** - General, Credit, M&A, Fleet analysis with specialized AI prompts
+4. **Reports archive system** - GET endpoint to retrieve previously generated reports by subject/ticker
+5. **Cloud Run memory is 2GB** - Required for Gemini initialization (was causing SIGKILL errors at 1GB)
+6. **Backend uses Gemini 2.0 Flash** - For cost-effective AI generation (~$0.014/month)
+7. **Dark theme is default** - CSS :root uses dark colors, [data-theme="light"] for light mode toggle
+8. **Design token system** - All colors, spacing, shadows use CSS variables for theme consistency
+9. **7-day cache for catalysts, 24h for other AI insights** - Minimizes API costs
+10. **All endpoints tested and working** - Full test suite provided in Troubleshooting section
 
 **Common next steps:**
-- Run news ingestion to populate database with tagged articles
-- Monitor Gemini API costs and cache hit rates
+- Run news ingestion to populate database with tagged articles for risk monitoring
+- Monitor Gemini API costs and cache hit rates in production
 - Consider implementing BTS T-100 API for more accurate load factor (currently estimated from TSA data)
+- Add more airlines to ticker chip quick picks as needed
+- Implement PDF export functionality for generated reports
