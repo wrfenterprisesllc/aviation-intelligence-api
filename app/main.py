@@ -850,6 +850,98 @@ def get_news_stats():
             'timestamp': datetime.now().isoformat()
         }), 500
 
+@app.route('/api/news/remove-images', methods=['POST'])
+def remove_images_from_articles():
+    """
+    Remove images from all existing articles in Firestore
+
+    This endpoint cleans up existing articles by:
+    - Removing <img> tags from content and summary fields
+    - Removing urlToImage from raw_payload
+
+    Returns:
+        JSON with success status and count of updated articles
+    """
+    start_time = datetime.now()
+
+    try:
+        from app.utils.text_cleaner import strip_images_from_html
+
+        if not db_service:
+            return jsonify({
+                'success': False,
+                'error': 'Database service not available',
+                'timestamp': datetime.now().isoformat()
+            }), 503
+
+        logger.info("🧹 Starting image cleanup for all articles...")
+
+        # Get all articles from Firestore
+        articles_ref = db_service.db.collection('news_articles')
+        docs = articles_ref.stream()
+
+        updated_count = 0
+        error_count = 0
+
+        for doc in docs:
+            try:
+                article_data = doc.to_dict()
+                article_id = doc.id
+
+                updates = {}
+
+                # Clean content field
+                if 'content' in article_data and article_data['content']:
+                    cleaned_content = strip_images_from_html(article_data['content'])
+                    if cleaned_content != article_data['content']:
+                        updates['content'] = cleaned_content
+
+                # Clean summary field
+                if 'summary' in article_data and article_data['summary']:
+                    cleaned_summary = strip_images_from_html(article_data['summary'])
+                    if cleaned_summary != article_data['summary']:
+                        updates['summary'] = cleaned_summary
+
+                # Remove urlToImage from raw_payload
+                if 'raw_payload' in article_data:
+                    raw_payload = article_data['raw_payload']
+                    if isinstance(raw_payload, dict) and 'urlToImage' in raw_payload:
+                        del raw_payload['urlToImage']
+                        updates['raw_payload'] = raw_payload
+
+                # Update document if there are changes
+                if updates:
+                    doc.reference.update(updates)
+                    updated_count += 1
+
+                    if updated_count % 10 == 0:
+                        logger.info(f"✅ Cleaned {updated_count} articles so far...")
+
+            except Exception as e:
+                logger.error(f"❌ Error cleaning article {doc.id}: {e}")
+                error_count += 1
+
+        response_time = (datetime.now() - start_time).total_seconds() * 1000
+
+        logger.info(f"🧹 Image cleanup complete: {updated_count} updated, {error_count} errors in {response_time:.1f}ms")
+
+        return jsonify({
+            'success': True,
+            'updated': updated_count,
+            'errors': error_count,
+            'timestamp': datetime.now().isoformat(),
+            'response_time_ms': round(response_time, 1)
+        })
+
+    except Exception as e:
+        logger.error(f"❌ Error in image cleanup endpoint: {e}")
+        return jsonify({
+            'success': False,
+            'error': 'Internal server error',
+            'message': str(e),
+            'timestamp': datetime.now().isoformat()
+        }), 500
+
 # ========== TSA HISTORICAL DATA ENDPOINTS ==========
 
 @app.route('/api/tsa/historical', methods=['GET'])

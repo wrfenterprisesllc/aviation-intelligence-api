@@ -11,6 +11,7 @@ from newsapi import NewsApiClient
 
 from app.models.news_article import NewsArticle
 from .article_scraper import ArticleScraper
+from app.utils.text_cleaner import strip_images_from_html
 
 logger = logging.getLogger(__name__)
 
@@ -31,7 +32,7 @@ class NewsAPIHandler:
         self.client = NewsApiClient(api_key=self.api_key)
 
         # Initialize article scraper for full content extraction
-        self.scraper = ArticleScraper(timeout=30)
+        self.scraper = ArticleScraper(timeout=60)
 
         # Aviation-related search queries
         self.search_queries = [
@@ -204,16 +205,19 @@ class NewsAPIHandler:
             
             # Extract entities from author info
             author = article_data.get('author', '') or ''
-            
-            # Build raw payload
+
+            # Clean images from content and summary
+            full_content = strip_images_from_html(full_content) if full_content else full_content
+            summary = strip_images_from_html(summary) if summary else summary
+
+            # Build raw payload (removed urlToImage)
             raw_payload = {
                 'newsapi_source': article_data.get('source', {}),
                 'author': author,
-                'urlToImage': article_data.get('urlToImage', ''),
                 'search_query': search_query,
                 'api_response': article_data
             }
-            
+
             # Create NewsArticle
             article = NewsArticle(
                 source='newsapi',

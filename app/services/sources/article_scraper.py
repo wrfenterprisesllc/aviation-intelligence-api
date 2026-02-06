@@ -3,9 +3,10 @@ Article Content Scraper
 Fetches full article text from URLs using newspaper4k
 """
 
-from newspaper import Article, Config
+from newspaper import Article, Config, ArticleException
 from typing import Optional
 import logging
+import time
 
 logger = logging.getLogger(__name__)
 
@@ -13,12 +14,12 @@ logger = logging.getLogger(__name__)
 class ArticleScraper:
     """Scrapes full article content from news websites"""
 
-    def __init__(self, timeout: int = 30, user_agent: Optional[str] = None):
+    def __init__(self, timeout: int = 60, user_agent: Optional[str] = None):
         """
         Initialize article scraper
 
         Args:
-            timeout: HTTP request timeout in seconds
+            timeout: HTTP request timeout in seconds (default: 60)
             user_agent: Custom User-Agent string (default: Aviation-Intelligence-Platform/1.0)
         """
         self.timeout = timeout
@@ -28,39 +29,53 @@ class ArticleScraper:
         self.config = Config()
         self.config.browser_user_agent = self.user_agent
         self.config.request_timeout = timeout
-        self.config.follow_robots_txt = True  # Respect site scraping rules
+        self.config.follow_robots_txt = False  # More aggressive scraping (was True)
         self.config.fetch_images = False  # We only need text content
         self.config.memoize_articles = False  # Don't cache (we have our own storage)
 
-    def fetch_full_content(self, url: str) -> Optional[str]:
+    def fetch_full_content(self, url: str, retry_count: int = 2) -> Optional[str]:
         """
-        Fetch and extract full article text from URL
+        Fetch and extract full article text from URL with retry logic
 
         Args:
             url: Article URL to scrape
+            retry_count: Number of retry attempts (default: 2)
 
         Returns:
-            Full article text or None if scraping fails
+            Full article text or None if scraping fails after all retries
         """
-        try:
-            # Create Article object with configuration
-            article = Article(url, config=self.config, language='en')
+        for attempt in range(retry_count):
+            try:
+                # Create Article object with configuration
+                article = Article(url, config=self.config, language='en')
 
-            # Download and parse
-            article.download()
-            article.parse()
+                # Download and parse
+                article.download()
+                article.parse()
 
-            # Extract text
-            if article.text and len(article.text) > 100:
-                logger.info(f"✅ Scraped {len(article.text)} chars from {url[:60]}...")
-                return article.text
-            else:
-                logger.warning(f"⚠️  No substantial text found at {url[:60]}...")
-                return None
+                # Extract clean text (no HTML, no images)
+                if article.text and len(article.text) > 200:
+                    char_count = len(article.text)
+                    logger.info(f"✅ Scraped {char_count} chars from {url[:60]}... (attempt {attempt + 1})")
+                    return article.text  # Plain text, automatically excludes HTML/images
+                else:
+                    logger.warning(f"⚠️  Scraped content too short ({len(article.text or '')} chars) from {url[:60]}...")
 
-        except Exception as e:
-            logger.warning(f"❌ Failed to scrape {url[:60]}...: {str(e)[:100]}")
-            return None
+            except ArticleException as e:
+                logger.warning(f"❌ Scraping failed (attempt {attempt + 1}/{retry_count}) for {url[:60]}...: {str(e)[:100]}")
+                if attempt < retry_count - 1:
+                    # Exponential backoff before retry
+                    wait_time = 2 ** attempt
+                    logger.debug(f"Waiting {wait_time}s before retry...")
+                    time.sleep(wait_time)
+            except Exception as e:
+                logger.error(f"❌ Unexpected error scraping {url[:60]}...: {str(e)[:100]}")
+                # Don't retry on unexpected errors
+                break
+
+        # All retry attempts failed
+        logger.warning(f"❌ Failed to scrape {url[:60]}... after {retry_count} attempts")
+        return None
 
     def should_scrape(self, current_content: str, source_url: str) -> bool:
         """

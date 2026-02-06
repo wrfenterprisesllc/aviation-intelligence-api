@@ -13,23 +13,24 @@ import time
 
 from app.models.news_article import NewsArticle
 from .article_scraper import ArticleScraper
+from app.utils.text_cleaner import strip_images_from_html
 
 logger = logging.getLogger(__name__)
 
 class RSSHandler:
     """Handles RSS feed parsing and article extraction"""
     
-    def __init__(self, timeout: int = 30, user_agent: str = None):
+    def __init__(self, timeout: int = 60, user_agent: str = None):
         """
         Initialize RSS handler
-        
+
         Args:
-            timeout: Request timeout in seconds
+            timeout: Request timeout in seconds (default: 60)
             user_agent: Custom user agent string
         """
         self.timeout = timeout
         self.user_agent = user_agent or 'Aviation-Intelligence-Platform/1.0 (+https://ai.wrfenterprisesllc.com)'
-        
+
         # Configure requests session
         self.session = requests.Session()
         self.session.headers.update({
@@ -138,6 +139,10 @@ class RSSHandler:
             # Extract tags based on RSS categories
             tags = self._extract_tags(entry)
             
+            # Clean images from content and summary
+            content = strip_images_from_html(content) if content else content
+            summary = strip_images_from_html(summary) if summary else summary
+
             # Build raw payload for debugging/reprocessing
             raw_payload = {
                 'feed_title': getattr(feed, 'title', ''),
@@ -147,7 +152,7 @@ class RSSHandler:
                 'entry_author': getattr(entry, 'author', ''),
                 'entry_categories': getattr(entry, 'tags', [])
             }
-            
+
             # Create NewsArticle
             article = NewsArticle(
                 source=source_id,
