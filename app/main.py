@@ -120,11 +120,13 @@ def root():
             '/api/monitoring/metrics',
             '/api/news/ingest',
             '/api/news/articles',
+            '/api/news/<article_id>',
             '/api/news/stats',
             '/api/tsa/historical',
             '/api/credit-spread/historical',
             '/api/reports/generate',
             '/api/reports/<id>',
+            '/api/reports',
             '/api/newsletter/generate',
             '/api/newsletter/latest',
             '/api/newsletter/<id>'
@@ -446,6 +448,7 @@ def get_articles():
     Query parameters:
     - source: Filter by source (e.g., 'newsapi', 'flightglobal_rss', 'sec_edgar')
     - tags: Comma-separated list of tags
+    - keywords: Search in title/summary (case-insensitive)
     - start_date: ISO format date (YYYY-MM-DD)
     - end_date: ISO format date (YYYY-MM-DD)
     - limit: Maximum number of articles (default 50)
@@ -465,6 +468,7 @@ def get_articles():
         source = request.args.get('source', None)
         tags_str = request.args.get('tags', None)
         tags = tags_str.split(',') if tags_str else None
+        keywords = request.args.get('keywords', None)
         start_date_str = request.args.get('start_date', None)
         end_date_str = request.args.get('end_date', None)
         limit = int(request.args.get('limit', 50))
@@ -482,6 +486,7 @@ def get_articles():
         articles = db_service.get_articles(
             source=source,
             tags=tags,
+            keywords=keywords,
             start_date=start_date,
             end_date=end_date,
             limit=limit,
@@ -510,6 +515,55 @@ def get_articles():
 
     except Exception as e:
         logger.error(f"❌ Error in get articles endpoint: {e}")
+        return jsonify({
+            'success': False,
+            'error': 'Internal server error',
+            'message': str(e),
+            'timestamp': datetime.now().isoformat()
+        }), 500
+
+@app.route('/api/news/<article_id>', methods=['GET'])
+def get_single_article(article_id):
+    """
+    Get a single article by ID
+
+    GET /api/news/<article_id>
+
+    Returns:
+        200: Article found with full details
+        404: Article not found
+        500: Server error
+    """
+    try:
+        start_time = datetime.now()
+
+        logger.info(f"📄 Fetching article: {article_id}")
+
+        # Get article from database service
+        article = db_service.get_article_by_id(article_id)
+
+        if not article:
+            logger.warning(f"⚠️  Article not found: {article_id}")
+            return jsonify({
+                'success': False,
+                'error': 'Article not found',
+                'article_id': article_id,
+                'timestamp': datetime.now().isoformat()
+            }), 404
+
+        response_time = (datetime.now() - start_time).total_seconds() * 1000
+
+        logger.info(f"✅ Article fetched successfully: {article_id} ({response_time:.1f}ms)")
+
+        return jsonify({
+            'success': True,
+            'article': article,
+            'timestamp': datetime.now().isoformat(),
+            'response_time_ms': round(response_time, 2)
+        })
+
+    except Exception as e:
+        logger.error(f"❌ Error fetching article {article_id}: {e}")
         return jsonify({
             'success': False,
             'error': 'Internal server error',
