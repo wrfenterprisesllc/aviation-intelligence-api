@@ -12,6 +12,7 @@ from urllib.parse import urljoin, urlparse
 import time
 
 from app.models.news_article import NewsArticle
+from .article_scraper import ArticleScraper
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +36,9 @@ class RSSHandler:
             'User-Agent': self.user_agent,
             'Accept': 'application/rss+xml, application/xml, text/xml'
         })
+
+        # Initialize article scraper for full content extraction
+        self.scraper = ArticleScraper(timeout=timeout, user_agent=user_agent)
     
     def fetch_articles(self, source_id: str, feed_url: str, max_articles: int = 50) -> List[NewsArticle]:
         """
@@ -113,7 +117,18 @@ class RSSHandler:
             # Extract content/summary
             content = self._extract_content(entry)
             summary = self._extract_summary(entry, content)
-            
+
+            # Attempt to scrape full content if RSS content is truncated
+            if self.scraper.should_scrape(content, source_url):
+                logger.info(f"🔍 Attempting to scrape full content for: {title[:60]}...")
+                full_content = self.scraper.fetch_full_content(source_url)
+
+                if full_content:
+                    content = full_content  # Replace truncated content with full text
+                    logger.info(f"✅ Replaced truncated content with {len(content)} chars")
+                else:
+                    logger.info(f"⚠️  Scraping failed, keeping RSS content ({len(content)} chars)")
+
             # Parse publication date
             published_at = self._parse_date(entry)
             

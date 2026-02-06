@@ -10,6 +10,7 @@ from typing import List, Dict, Any, Optional
 from newsapi import NewsApiClient
 
 from app.models.news_article import NewsArticle
+from .article_scraper import ArticleScraper
 
 logger = logging.getLogger(__name__)
 
@@ -28,7 +29,10 @@ class NewsAPIHandler:
             raise ValueError("NewsAPI key is required. Set NEWSAPI_KEY environment variable.")
         
         self.client = NewsApiClient(api_key=self.api_key)
-        
+
+        # Initialize article scraper for full content extraction
+        self.scraper = ArticleScraper(timeout=30)
+
         # Aviation-related search queries
         self.search_queries = [
             'aircraft leasing',
@@ -160,14 +164,27 @@ class NewsAPIHandler:
             # If content is available and longer than description, use it
             if content and len(content) > len(description):
                 # NewsAPI often truncates content with [+X chars] notation
-                if '[+' in content and 'chars]' in content:
+                is_truncated = '[+' in content and 'chars]' in content
+                if is_truncated:
                     # Content is truncated, use description for both
                     full_content = description
                 else:
                     full_content = content
             else:
                 full_content = description
-            
+                is_truncated = True  # Assume truncated if only description available
+
+            # Attempt to scrape full content if NewsAPI content is truncated
+            if is_truncated and url:
+                logger.info(f"🔍 NewsAPI content truncated for: {title[:60]}...")
+                scraped_content = self.scraper.fetch_full_content(url)
+
+                if scraped_content:
+                    full_content = scraped_content
+                    logger.info(f"✅ Replaced NewsAPI excerpt with {len(full_content)} chars")
+                else:
+                    logger.info(f"⚠️  Scraping failed, keeping NewsAPI content")
+
             # Parse publication date
             published_str = article_data.get('publishedAt', '')
             try:
