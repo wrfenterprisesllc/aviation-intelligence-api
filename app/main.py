@@ -64,24 +64,28 @@ try:
     from app.services.insights_service import InsightsService
     from app.services.stock_data_service import StockDataService
     from app.services.sec_filings_service import SECFilingsService
+    from app.services.bts_service import BTSService
 
     gemini_service = GeminiService()
     stock_service = StockDataService()
     sec_service = SECFilingsService()
+    bts_service = BTSService(db_service=db_service)
 
     insights_service = InsightsService(
         gemini_service=gemini_service,
         database_service=db_service,
         stock_service=stock_service,
-        sec_service=sec_service
+        sec_service=sec_service,
+        bts_service=bts_service
     )
-    logger.info("✅ Gemini, Stock, SEC, and Insights services initialized")
+    logger.info("✅ Gemini, Stock, SEC, BTS, and Insights services initialized")
 except Exception as e:
     logger.warning(f"⚠️ Gemini/Insights service initialization failed: {e}")
     gemini_service = None
     insights_service = None
     stock_service = None
     sec_service = None
+    bts_service = None
 
 @app.before_request
 def before_request():
@@ -1938,6 +1942,195 @@ def get_industry_load_factor():
             'message': str(e),
             'timestamp': datetime.now().isoformat()
         }), 500
+
+# ============================================================================
+# CARRIER FINANCIALS ENDPOINTS - BTS Form 41 Data
+# ============================================================================
+
+@app.route('/api/carriers')
+def list_carriers():
+    """List all available carriers with basic info"""
+    start_time = datetime.now()
+
+    try:
+        if not bts_service:
+            return jsonify({
+                'success': False,
+                'error': 'BTS service not available',
+                'timestamp': datetime.now().isoformat()
+            }), 503
+
+        carriers = []
+        for code, info in bts_service.CARRIER_CODES.items():
+            carriers.append({
+                'carrier_code': code,
+                'carrier_name': info['name'],
+                'ticker': info['ticker']
+            })
+
+        response_time = (datetime.now() - start_time).total_seconds() * 1000
+
+        return jsonify({
+            'success': True,
+            'carriers': carriers,
+            'count': len(carriers),
+            'timestamp': datetime.now().isoformat(),
+            'response_time_ms': round(response_time, 1)
+        })
+
+    except Exception as e:
+        logger.error(f"❌ Error in list carriers endpoint: {e}")
+        return jsonify({
+            'success': False,
+            'error': 'Internal server error',
+            'message': str(e),
+            'timestamp': datetime.now().isoformat()
+        }), 500
+
+
+@app.route('/api/carriers/<carrier_code>/financials')
+def get_carrier_financials(carrier_code: str):
+    """Get financial data for a specific carrier"""
+    start_time = datetime.now()
+
+    try:
+        if not bts_service:
+            return jsonify({
+                'success': False,
+                'error': 'BTS service not available',
+                'timestamp': datetime.now().isoformat()
+            }), 503
+
+        carrier_code = carrier_code.upper()
+        financials = bts_service.get_carrier_financials(carrier_code)
+
+        response_time = (datetime.now() - start_time).total_seconds() * 1000
+
+        if financials:
+            return jsonify({
+                'success': True,
+                'financials': financials,
+                'timestamp': datetime.now().isoformat(),
+                'response_time_ms': round(response_time, 1)
+            })
+        else:
+            return jsonify({
+                'success': False,
+                'error': f'No financial data found for carrier {carrier_code}',
+                'timestamp': datetime.now().isoformat(),
+                'response_time_ms': round(response_time, 1)
+            }), 404
+
+    except Exception as e:
+        logger.error(f"❌ Error in carrier financials endpoint: {e}")
+        return jsonify({
+            'success': False,
+            'error': 'Internal server error',
+            'message': str(e),
+            'timestamp': datetime.now().isoformat()
+        }), 500
+
+
+@app.route('/api/carriers/all')
+def get_all_carrier_financials():
+    """Get financial data for all carriers"""
+    start_time = datetime.now()
+
+    try:
+        if not bts_service:
+            return jsonify({
+                'success': False,
+                'error': 'BTS service not available',
+                'timestamp': datetime.now().isoformat()
+            }), 503
+
+        all_financials = bts_service.get_all_carriers()
+
+        response_time = (datetime.now() - start_time).total_seconds() * 1000
+
+        return jsonify({
+            'success': True,
+            'carriers': all_financials,
+            'count': len(all_financials),
+            'timestamp': datetime.now().isoformat(),
+            'response_time_ms': round(response_time, 1)
+        })
+
+    except Exception as e:
+        logger.error(f"❌ Error in all carrier financials endpoint: {e}")
+        return jsonify({
+            'success': False,
+            'error': 'Internal server error',
+            'message': str(e),
+            'timestamp': datetime.now().isoformat()
+        }), 500
+
+
+@app.route('/api/carriers/refresh', methods=['POST'])
+def refresh_carrier_financials():
+    """Refresh financial data for all carriers (admin endpoint)"""
+    start_time = datetime.now()
+
+    try:
+        if not bts_service:
+            return jsonify({
+                'success': False,
+                'error': 'BTS service not available',
+                'timestamp': datetime.now().isoformat()
+            }), 503
+
+        result = bts_service.refresh_all_carriers()
+
+        response_time = (datetime.now() - start_time).total_seconds() * 1000
+        result['response_time_ms'] = round(response_time, 1)
+
+        return jsonify(result)
+
+    except Exception as e:
+        logger.error(f"❌ Error in refresh carriers endpoint: {e}")
+        return jsonify({
+            'success': False,
+            'error': 'Internal server error',
+            'message': str(e),
+            'timestamp': datetime.now().isoformat()
+        }), 500
+
+
+@app.route('/api/carriers/<carrier_code>/report-context')
+def get_carrier_report_context(carrier_code: str):
+    """Get formatted carrier financials for inclusion in reports"""
+    start_time = datetime.now()
+
+    try:
+        if not bts_service:
+            return jsonify({
+                'success': False,
+                'error': 'BTS service not available',
+                'timestamp': datetime.now().isoformat()
+            }), 503
+
+        carrier_code = carrier_code.upper()
+        formatted_context = bts_service.format_for_report(carrier_code)
+
+        response_time = (datetime.now() - start_time).total_seconds() * 1000
+
+        return jsonify({
+            'success': True,
+            'carrier_code': carrier_code,
+            'report_context': formatted_context,
+            'timestamp': datetime.now().isoformat(),
+            'response_time_ms': round(response_time, 1)
+        })
+
+    except Exception as e:
+        logger.error(f"❌ Error in carrier report context endpoint: {e}")
+        return jsonify({
+            'success': False,
+            'error': 'Internal server error',
+            'message': str(e),
+            'timestamp': datetime.now().isoformat()
+        }), 500
+
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 8080))

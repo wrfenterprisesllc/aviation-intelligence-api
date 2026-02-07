@@ -19,7 +19,7 @@ EASTERN_TZ = pytz.timezone('US/Eastern')
 class InsightsService:
     """Service for generating AI-powered insights, reports, and newsletters"""
 
-    def __init__(self, gemini_service, database_service, stock_service=None, sec_service=None):
+    def __init__(self, gemini_service, database_service, stock_service=None, sec_service=None, bts_service=None):
         """
         Initialize insights service
 
@@ -28,11 +28,13 @@ class InsightsService:
             database_service: DatabaseService instance for data retrieval
             stock_service: StockDataService instance for stock data (optional)
             sec_service: SECFilingsService instance for SEC filings (optional)
+            bts_service: BTSService instance for carrier financials (optional)
         """
         self.gemini = gemini_service
         self.db = database_service
         self.stock_service = stock_service
         self.sec_service = sec_service
+        self.bts_service = bts_service
         logger.info("✅ Insights service initialized")
 
     def generate_airline_report(
@@ -128,6 +130,17 @@ class InsightsService:
                     max_results=5
                 )
 
+            # Get BTS carrier financials if service is available
+            carrier_financials = None
+            if self.bts_service and report_type in ['airline', 'credit_analysis', 'comprehensive']:
+                carrier_code = self.bts_service.get_carrier_by_name(subject)
+                if carrier_code:
+                    carrier_financials = self.bts_service.get_carrier_financials(carrier_code)
+                    if carrier_financials:
+                        logger.info(f"✅ Retrieved BTS financials for {carrier_code}")
+                else:
+                    logger.warning(f"⚠️ Could not match airline name '{subject}' to carrier code")
+
             # Log data availability for debugging
             if not news_articles:
                 logger.warning(f"⚠️ No news articles found for {subject} from {start_date.date()} to {end_date.date()}")
@@ -144,7 +157,8 @@ class InsightsService:
                        f"{len(tsa_data) if tsa_data else 0} TSA records, "
                        f"FRED: {'Yes' if fred_data else 'No'}, "
                        f"Stock: {'Yes' if stock_data else 'No'}, "
-                       f"SEC: {'Yes' if sec_filings else 'No'}")
+                       f"SEC: {'Yes' if sec_filings else 'No'}, "
+                       f"BTS: {'Yes' if carrier_financials else 'No'}")
 
             # Build prompt based on report type
             if report_type == 'credit_analysis':
@@ -155,6 +169,7 @@ class InsightsService:
                     fred_data=fred_data,
                     stock_data=stock_data,
                     sec_filings=sec_filings,
+                    carrier_financials=carrier_financials,
                     period_start=start_date,
                     period_end=end_date
                 )
@@ -482,6 +497,7 @@ Generate the report now:"""
         fred_data: Optional[Dict],
         stock_data: Optional[Dict],
         sec_filings: Optional[Dict],
+        carrier_financials: Optional[Dict],
         period_start: datetime,
         period_end: datetime
     ) -> str:
@@ -493,12 +509,15 @@ Generate the report now:"""
         fred_summary = self._format_fred_data(fred_data)
         stock_summary = self._format_stock_data(stock_data)
         sec_summary = self._format_sec_filings(sec_filings)
+        carrier_summary = self._format_carrier_financials(carrier_financials)
 
         prompt = f"""You are a senior airline credit analyst. Generate a comprehensive credit analysis report for {subject} covering {period_start.strftime('%B %d, %Y')} to {period_end.strftime('%B %d, %Y')}.
 
 **Perspective**: Analyze from a lender/bondholder perspective, focusing on creditworthiness and financial risk.
 
 **Available Data**:
+
+{carrier_summary}
 
 {news_summary}
 
@@ -1009,6 +1028,48 @@ Generate the newsletter now:"""
             if description:
                 formatted += f"  {description}\n"
 
+        return formatted
+
+    def _format_carrier_financials(self, carrier_financials: Optional[Dict]) -> str:
+        """Format BTS Form 41 carrier financials for prompt inclusion"""
+        if not carrier_financials:
+            return "**Carrier Financial Data (BTS Form 41)**: Not available."
+
+        # Format revenue in billions
+        revenue_b = carrier_financials.get('operating_revenue', 0) / 1_000_000_000
+        expenses_b = carrier_financials.get('operating_expenses', 0) / 1_000_000_000
+        op_income_m = carrier_financials.get('operating_income', 0) / 1_000_000
+        net_income_m = carrier_financials.get('net_income', 0) / 1_000_000
+        fuel_m = carrier_financials.get('fuel_expense', 0) / 1_000_000
+        labor_m = carrier_financials.get('labor_expense', 0) / 1_000_000
+        asm_b = carrier_financials.get('asm', 0) / 1_000_000_000
+        rpm_b = carrier_financials.get('rpm', 0) / 1_000_000_000
+
+        formatted = f"""**Carrier Financial Data** (BTS Form 41 - {carrier_financials.get('period', 'Unknown')}):
+Carrier: {carrier_financials.get('carrier_name', 'Unknown')} ({carrier_financials.get('carrier_code', '??')}) | Ticker: {carrier_financials.get('ticker', '??')}
+Period Ending: {carrier_financials.get('period_end_date', 'Unknown')}
+
+**Income Statement:**
+- Operating Revenue: ${revenue_b:.2f}B
+- Operating Expenses: ${expenses_b:.2f}B
+- Operating Income: ${op_income_m:.0f}M
+- Net Income: ${net_income_m:.0f}M
+- Operating Margin: {carrier_financials.get('operating_margin_pct', 0):.1f}%
+
+**Expense Breakdown:**
+- Fuel Expense: ${fuel_m:.0f}M ({fuel_m/(expenses_b*1000)*100:.1f}% of OpEx)
+- Labor Expense: ${labor_m:.0f}M ({labor_m/(expenses_b*1000)*100:.1f}% of OpEx)
+
+**Traffic Metrics:**
+- Available Seat Miles (ASM): {asm_b:.1f}B
+- Revenue Passenger Miles (RPM): {rpm_b:.1f}B
+- Load Factor: {carrier_financials.get('load_factor_pct', 0):.1f}%
+- RASM (Revenue/ASM): {carrier_financials.get('rasm_cents', 0):.2f}¢
+- CASM (Cost/ASM): {carrier_financials.get('casm_cents', 0):.2f}¢
+- RASM-CASM Spread: {(carrier_financials.get('rasm_cents', 0) - carrier_financials.get('casm_cents', 0)):.2f}¢
+
+Source: DOT Bureau of Transportation Statistics Form 41
+"""
         return formatted
 
     def _parse_sections(self, markdown_content: str) -> Dict[str, str]:

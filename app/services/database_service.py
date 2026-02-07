@@ -890,6 +890,157 @@ class DatabaseService:
             self.logger.error(f"Error fetching all newsletters: {e}")
             return []
 
+    # ========== CARRIER FINANCIALS ==========
+
+    def save_carrier_financial(self, financial_data: Dict[str, Any]) -> Optional[str]:
+        """
+        Save carrier financial data to Firestore
+
+        Args:
+            financial_data: Dictionary containing carrier financial fields
+                - carrier_code: str (e.g., 'UA', 'DL')
+                - period: str (e.g., 'Q3-2025')
+                - operating_revenue: float
+                - etc.
+
+        Returns:
+            Document ID if successful, None otherwise
+        """
+        try:
+            # Validate required fields
+            required_fields = ['carrier_code', 'period']
+            for field in required_fields:
+                if field not in financial_data:
+                    raise ValueError(f"Missing required field: {field}")
+
+            # Use carrier_code + period as document ID
+            import hashlib
+            unique_key = f"{financial_data['carrier_code']}_{financial_data['period']}"
+            doc_id = hashlib.md5(unique_key.encode()).hexdigest()
+
+            # Add ingestion timestamp if not present
+            if 'ingested_at' not in financial_data:
+                financial_data['ingested_at'] = datetime.now().isoformat()
+
+            # Save to Firestore
+            doc_ref = self.db.collection('carrier_financials').document(doc_id)
+            doc_ref.set(financial_data)
+
+            self.logger.info(f"Saved carrier financials: {financial_data['carrier_code']} {financial_data['period']}")
+            return doc_id
+
+        except Exception as e:
+            self.logger.error(f"Error saving carrier financial: {e}")
+            return None
+
+    def get_carrier_financial(self, carrier_code: str, period: str = None) -> Optional[Dict[str, Any]]:
+        """
+        Get financial data for a specific carrier
+
+        Args:
+            carrier_code: DOT carrier code (e.g., 'UA', 'DL')
+            period: Optional specific period (e.g., 'Q3-2025'), gets latest if None
+
+        Returns:
+            Carrier financial dictionary or None if not found
+        """
+        try:
+            if period:
+                # Get specific period
+                import hashlib
+                unique_key = f"{carrier_code}_{period}"
+                doc_id = hashlib.md5(unique_key.encode()).hexdigest()
+
+                doc_ref = self.db.collection('carrier_financials').document(doc_id)
+                doc = doc_ref.get()
+
+                if doc.exists:
+                    data = doc.to_dict()
+                    data['id'] = doc.id
+                    return data
+                return None
+            else:
+                # Get latest for carrier
+                query = (self.db.collection('carrier_financials')
+                        .where(filter=FieldFilter('carrier_code', '==', carrier_code))
+                        .order_by('period_end_date', direction=firestore.Query.DESCENDING)
+                        .limit(1))
+
+                docs = list(query.stream())
+
+                if docs:
+                    data = docs[0].to_dict()
+                    data['id'] = docs[0].id
+                    return data
+
+                return None
+
+        except Exception as e:
+            self.logger.error(f"Error fetching carrier financial: {e}")
+            return None
+
+    def get_latest_carrier_financials(self, carrier_code: str, limit: int = 4) -> List[Dict[str, Any]]:
+        """
+        Get recent financial periods for a carrier (for trend analysis)
+
+        Args:
+            carrier_code: DOT carrier code (e.g., 'UA', 'DL')
+            limit: Number of periods to return (default 4 quarters)
+
+        Returns:
+            List of carrier financial dictionaries
+        """
+        try:
+            query = (self.db.collection('carrier_financials')
+                    .where(filter=FieldFilter('carrier_code', '==', carrier_code))
+                    .order_by('period_end_date', direction=firestore.Query.DESCENDING)
+                    .limit(limit))
+
+            docs = list(query.stream())
+            results = []
+
+            for doc in docs:
+                data = doc.to_dict()
+                data['id'] = doc.id
+                results.append(data)
+
+            return results
+
+        except Exception as e:
+            self.logger.error(f"Error fetching carrier financials: {e}")
+            return []
+
+    def get_all_carrier_financials(self, period: str = None) -> List[Dict[str, Any]]:
+        """
+        Get financials for all carriers (optionally for a specific period)
+
+        Args:
+            period: Optional period filter (e.g., 'Q3-2025')
+
+        Returns:
+            List of carrier financial dictionaries
+        """
+        try:
+            query = self.db.collection('carrier_financials')
+
+            if period:
+                query = query.where(filter=FieldFilter('period', '==', period))
+
+            docs = list(query.stream())
+            results = []
+
+            for doc in docs:
+                data = doc.to_dict()
+                data['id'] = doc.id
+                results.append(data)
+
+            self.logger.info(f"Retrieved {len(results)} carrier financials")
+            return results
+
+        except Exception as e:
+            self.logger.error(f"Error fetching all carrier financials: {e}")
+            return []
+
     # ========== HEALTH CHECK ==========
 
     def health_check(self) -> Dict[str, Any]:
@@ -907,7 +1058,7 @@ class DatabaseService:
             return {
                 'status': 'healthy',
                 'database': 'aviation-intelligence',
-                'collections': ['news_articles', 'insights', 'tsa_data', 'fred_data', 'airline_reports', 'weekly_newsletters']
+                'collections': ['news_articles', 'insights', 'tsa_data', 'fred_data', 'airline_reports', 'weekly_newsletters', 'carrier_financials']
             }
         except Exception as e:
             return {
