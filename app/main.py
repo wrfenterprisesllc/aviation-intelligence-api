@@ -2166,9 +2166,13 @@ def get_balance_sheet(airline_name: str):
                 'response_time_ms': round(response_time, 1)
             })
         else:
+            # Check if yfinance is available
+            from app.services.financial_data_service import YFINANCE_AVAILABLE
             return jsonify({
                 'success': False,
                 'error': f'Could not fetch balance sheet for {airline_name}',
+                'yfinance_available': YFINANCE_AVAILABLE,
+                'ticker_found': financial_service.get_ticker(airline_name),
                 'timestamp': datetime.now().isoformat(),
                 'response_time_ms': round(response_time, 1)
             }), 404

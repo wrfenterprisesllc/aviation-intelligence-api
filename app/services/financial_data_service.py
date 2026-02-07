@@ -20,9 +20,10 @@ logger = logging.getLogger(__name__)
 try:
     import yfinance as yf
     YFINANCE_AVAILABLE = True
-except ImportError:
+    logger.info("✅ yfinance imported successfully")
+except ImportError as e:
     YFINANCE_AVAILABLE = False
-    logger.warning("yfinance not available - balance sheet data will be limited")
+    logger.warning(f"yfinance not available - balance sheet data will be limited: {e}")
 
 
 class FinancialDataService:
