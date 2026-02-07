@@ -2511,6 +2511,235 @@ def get_ingestion_status():
     return jsonify(status)
 
 
+# ============================================================================
+# DEFENSE CONTRACTS ENDPOINTS
+# ============================================================================
+
+# Initialize defense contracts handler
+try:
+    from app.services.sources.defense_contracts_handler import DefenseContractsHandler
+    defense_contracts_handler = DefenseContractsHandler()
+    logger.info("✅ Defense Contracts handler initialized")
+except Exception as e:
+    logger.warning(f"⚠️ Defense Contracts handler initialization failed: {e}")
+    defense_contracts_handler = None
+
+
+@app.route('/api/defense-contracts', methods=['GET'])
+def get_defense_contracts():
+    """
+    Get defense contracts with optional filters
+
+    Query params:
+        - start_date: Filter contracts after this date (YYYY-MM-DD)
+        - end_date: Filter contracts before this date (YYYY-MM-DD)
+        - branch: Filter by military branch (NAVY, AIR FORCE, ARMY, etc.)
+        - contractor: Filter by contractor name (partial match)
+        - aviation_only: If 'true', only return aviation-related contracts
+        - limit: Maximum number of results (default 50)
+    """
+    start_time = datetime.now()
+
+    try:
+        # Parse query parameters
+        start_date = None
+        end_date = None
+
+        start_date_str = request.args.get('start_date')
+        end_date_str = request.args.get('end_date')
+
+        if start_date_str:
+            start_date = datetime.strptime(start_date_str, '%Y-%m-%d')
+        if end_date_str:
+            end_date = datetime.strptime(end_date_str, '%Y-%m-%d')
+
+        branch = request.args.get('branch')
+        contractor = request.args.get('contractor')
+        aviation_only = request.args.get('aviation_only', 'false').lower() == 'true'
+        limit = int(request.args.get('limit', 50))
+
+        # Get contracts from database
+        contracts = db_service.get_defense_contracts(
+            start_date=start_date,
+            end_date=end_date,
+            branch=branch,
+            contractor=contractor,
+            aviation_only=aviation_only,
+            limit=limit
+        )
+
+        response_time = (datetime.now() - start_time).total_seconds() * 1000
+
+        return jsonify({
+            'success': True,
+            'contracts': contracts,
+            'count': len(contracts),
+            'filters': {
+                'start_date': start_date_str,
+                'end_date': end_date_str,
+                'branch': branch,
+                'contractor': contractor,
+                'aviation_only': aviation_only,
+                'limit': limit
+            },
+            'response_time_ms': round(response_time, 1)
+        })
+
+    except Exception as e:
+        logger.error(f"Error fetching defense contracts: {e}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+
+@app.route('/api/defense-contracts/summary', methods=['GET'])
+def get_defense_contracts_summary():
+    """
+    Get summary statistics for defense contracts
+
+    Query params:
+        - start_date: Filter contracts after this date (YYYY-MM-DD)
+        - end_date: Filter contracts before this date (YYYY-MM-DD)
+    """
+    start_time = datetime.now()
+
+    try:
+        start_date = None
+        end_date = None
+
+        start_date_str = request.args.get('start_date')
+        end_date_str = request.args.get('end_date')
+
+        if start_date_str:
+            start_date = datetime.strptime(start_date_str, '%Y-%m-%d')
+        if end_date_str:
+            end_date = datetime.strptime(end_date_str, '%Y-%m-%d')
+
+        summary = db_service.get_defense_contract_summary(
+            start_date=start_date,
+            end_date=end_date
+        )
+
+        response_time = (datetime.now() - start_time).total_seconds() * 1000
+        summary['response_time_ms'] = round(response_time, 1)
+        summary['success'] = True
+
+        return jsonify(summary)
+
+    except Exception as e:
+        logger.error(f"Error fetching defense contracts summary: {e}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+
+@app.route('/api/ingest/defense-contracts', methods=['POST'])
+def ingest_defense_contracts():
+    """
+    Ingest defense contracts from defense.gov
+
+    This endpoint fetches recent contract announcements and stores them
+    in Firestore. Designed to be triggered daily by Cloud Scheduler.
+
+    Request body (optional):
+        - days_back: Number of days to fetch (default 7)
+        - aviation_only: If true, only store aviation-related contracts (default true)
+    """
+    start_time = datetime.now()
+    from datetime import timezone
+
+    if not defense_contracts_handler:
+        return jsonify({
+            'success': False,
+            'error': 'Defense contracts handler not available'
+        }), 503
+
+    if not db_service:
+        return jsonify({
+            'success': False,
+            'error': 'Database service not available'
+        }), 503
+
+    try:
+        # Parse request body
+        data = request.get_json() or {}
+        days_back = data.get('days_back', 7)
+        aviation_only = data.get('aviation_only', True)
+
+        logger.info(f"🎯 Starting defense contracts ingestion (last {days_back} days, aviation_only={aviation_only})")
+
+        # Fetch contracts from defense.gov
+        contracts = defense_contracts_handler.fetch_recent_contracts(
+            days_back=days_back,
+            aviation_only=aviation_only
+        )
+
+        logger.info(f"📋 Fetched {len(contracts)} contracts from defense.gov")
+
+        # Store contracts in database
+        saved_count = 0
+        duplicate_count = 0
+        errors = []
+
+        for contract in contracts:
+            try:
+                doc_id = db_service.save_defense_contract(contract)
+                if doc_id:
+                    saved_count += 1
+                else:
+                    duplicate_count += 1
+            except Exception as e:
+                errors.append(f"{contract.get('contractor', 'Unknown')}: {str(e)}")
+
+        # Generate summary
+        summary = defense_contracts_handler.get_aviation_contract_summary(contracts)
+
+        response_time = (datetime.now() - start_time).total_seconds() * 1000
+
+        result = {
+            'success': True,
+            'contracts_fetched': len(contracts),
+            'contracts_saved': saved_count,
+            'duplicates_skipped': duplicate_count,
+            'errors': errors,
+            'summary': summary,
+            'parameters': {
+                'days_back': days_back,
+                'aviation_only': aviation_only
+            },
+            'timestamp': datetime.now(timezone.utc).isoformat(),
+            'response_time_ms': round(response_time, 1)
+        }
+
+        logger.info(f"✅ Defense contracts ingestion complete: {saved_count} saved, {duplicate_count} duplicates, {len(errors)} errors")
+
+        return jsonify(result)
+
+    except Exception as e:
+        logger.error(f"Error during defense contracts ingestion: {e}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+
+@app.route('/api/defense-contracts/test', methods=['GET'])
+def test_defense_contracts_connection():
+    """
+    Test connection to defense.gov contracts page
+    """
+    if not defense_contracts_handler:
+        return jsonify({
+            'success': False,
+            'error': 'Defense contracts handler not available'
+        }), 503
+
+    result = defense_contracts_handler.test_connection()
+    return jsonify(result)
+
+
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 8080))
     app.run(host='0.0.0.0', port=port, debug=False)

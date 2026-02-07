@@ -1175,6 +1175,204 @@ class DatabaseService:
             self.logger.error(f"Error fetching carrier financial snapshot: {e}")
             return None
 
+    # ========== DEFENSE CONTRACTS ==========
+
+    def save_defense_contract(self, contract_data: Dict[str, Any]) -> Optional[str]:
+        """
+        Save defense contract data to Firestore
+
+        Args:
+            contract_data: Dictionary containing defense contract fields
+                - contractor: str (company name)
+                - branch: str (military branch)
+                - contract_value: float
+                - contract_number: str (optional)
+                - announcement_date: str (YYYY-MM-DD)
+                - description: str
+                - source_url: str
+
+        Returns:
+            Document ID if successfully saved, None if duplicate or error
+        """
+        try:
+            # Validate required fields
+            required_fields = ['contractor', 'branch', 'announcement_date']
+            for field in required_fields:
+                if field not in contract_data:
+                    raise ValueError(f"Missing required field: {field}")
+
+            # Create unique document ID from contractor + date + value
+            import hashlib
+            unique_key = f"{contract_data['contractor']}_{contract_data['announcement_date']}_{contract_data.get('contract_value', 0)}"
+            doc_id = hashlib.md5(unique_key.encode()).hexdigest()[:16]
+
+            # Check if contract already exists
+            doc_ref = self.db.collection('defense_contracts').document(doc_id)
+            if doc_ref.get().exists:
+                self.logger.debug(f"Defense contract already exists: {contract_data['contractor']}")
+                return None
+
+            # Add ingestion timestamp
+            contract_data['ingested_at'] = datetime.now()
+
+            # Save to Firestore
+            doc_ref.set(contract_data)
+
+            value_str = contract_data.get('contract_value_formatted', f"${contract_data.get('contract_value', 0):,.0f}")
+            self.logger.info(f"Saved defense contract: {contract_data['contractor']} - {value_str}")
+            return doc_id
+
+        except Exception as e:
+            self.logger.error(f"Error saving defense contract: {e}")
+            return None
+
+    def get_defense_contracts(
+        self,
+        start_date: Optional[datetime] = None,
+        end_date: Optional[datetime] = None,
+        branch: Optional[str] = None,
+        contractor: Optional[str] = None,
+        aviation_only: bool = False,
+        limit: int = 50
+    ) -> List[Dict[str, Any]]:
+        """
+        Query defense contracts with optional filters
+
+        Args:
+            start_date: Filter contracts after this date
+            end_date: Filter contracts before this date
+            branch: Filter by military branch (e.g., 'NAVY', 'AIR FORCE')
+            contractor: Filter by contractor name (partial match)
+            aviation_only: If True, only return aviation-related contracts
+            limit: Maximum number of records to return
+
+        Returns:
+            List of defense contract dictionaries
+        """
+        try:
+            query = self.db.collection('defense_contracts')
+
+            # Apply date filters
+            if start_date:
+                query = query.where(filter=FieldFilter('announcement_date', '>=', start_date.strftime('%Y-%m-%d')))
+            if end_date:
+                query = query.where(filter=FieldFilter('announcement_date', '<=', end_date.strftime('%Y-%m-%d')))
+
+            # Apply branch filter
+            if branch:
+                query = query.where(filter=FieldFilter('branch', '==', branch.upper()))
+
+            # Order by date (newest first)
+            query = query.order_by('announcement_date', direction=firestore.Query.DESCENDING)
+            query = query.limit(limit)
+
+            # Execute query
+            docs = query.stream()
+            contracts = []
+
+            for doc in docs:
+                data = doc.to_dict()
+                data['id'] = doc.id
+
+                # Convert ingested_at timestamp if present
+                if 'ingested_at' in data and hasattr(data['ingested_at'], 'timestamp'):
+                    data['ingested_at'] = data['ingested_at'].replace(tzinfo=None)
+
+                # Apply contractor filter (post-query since Firestore doesn't support partial match)
+                if contractor and contractor.lower() not in data.get('contractor', '').lower():
+                    continue
+
+                contracts.append(data)
+
+            self.logger.info(f"Retrieved {len(contracts)} defense contracts")
+            return contracts
+
+        except Exception as e:
+            self.logger.error(f"Error querying defense contracts: {e}")
+            return []
+
+    def get_defense_contract_summary(
+        self,
+        start_date: Optional[datetime] = None,
+        end_date: Optional[datetime] = None
+    ) -> Dict[str, Any]:
+        """
+        Get summary statistics for defense contracts
+
+        Args:
+            start_date: Filter contracts after this date
+            end_date: Filter contracts before this date
+
+        Returns:
+            Summary dictionary with total value, by branch, etc.
+        """
+        try:
+            contracts = self.get_defense_contracts(
+                start_date=start_date,
+                end_date=end_date,
+                limit=500  # Higher limit for summary
+            )
+
+            if not contracts:
+                return {
+                    'total_contracts': 0,
+                    'total_value': 0,
+                    'by_branch': {},
+                    'date_range': {
+                        'start': start_date.strftime('%Y-%m-%d') if start_date else None,
+                        'end': end_date.strftime('%Y-%m-%d') if end_date else None
+                    }
+                }
+
+            total_value = sum(c.get('contract_value', 0) for c in contracts)
+
+            # Group by branch
+            by_branch = {}
+            for c in contracts:
+                branch = c.get('branch', 'Unknown')
+                if branch not in by_branch:
+                    by_branch[branch] = {'count': 0, 'value': 0}
+                by_branch[branch]['count'] += 1
+                by_branch[branch]['value'] += c.get('contract_value', 0)
+
+            # Top contractors
+            by_contractor = {}
+            for c in contracts:
+                contractor = c.get('contractor', 'Unknown')
+                if contractor not in by_contractor:
+                    by_contractor[contractor] = {'count': 0, 'value': 0}
+                by_contractor[contractor]['count'] += 1
+                by_contractor[contractor]['value'] += c.get('contract_value', 0)
+
+            # Sort and get top 10
+            top_contractors = dict(sorted(
+                by_contractor.items(),
+                key=lambda x: x[1]['value'],
+                reverse=True
+            )[:10])
+
+            return {
+                'total_contracts': len(contracts),
+                'total_value': total_value,
+                'total_value_formatted': f"${total_value/1_000_000_000:.2f}B" if total_value >= 1_000_000_000 else f"${total_value/1_000_000:.1f}M",
+                'avg_contract_value': total_value / len(contracts) if contracts else 0,
+                'by_branch': by_branch,
+                'top_contractors': top_contractors,
+                'date_range': {
+                    'start': start_date.strftime('%Y-%m-%d') if start_date else None,
+                    'end': end_date.strftime('%Y-%m-%d') if end_date else None
+                }
+            }
+
+        except Exception as e:
+            self.logger.error(f"Error getting defense contract summary: {e}")
+            return {
+                'total_contracts': 0,
+                'total_value': 0,
+                'by_branch': {},
+                'error': str(e)
+            }
+
     # ========== HEALTH CHECK ==========
 
     def health_check(self) -> Dict[str, Any]:
