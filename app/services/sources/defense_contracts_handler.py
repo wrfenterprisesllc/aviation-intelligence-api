@@ -8,6 +8,8 @@ import requests
 from datetime import datetime, timedelta
 from typing import List, Dict, Any, Optional
 import re
+import time
+import random
 from bs4 import BeautifulSoup
 
 logger = logging.getLogger(__name__)
@@ -21,21 +23,18 @@ class DefenseContractsHandler:
         self.base_url = "https://www.defense.gov/News/Contracts/"
         self.article_base = "https://www.defense.gov"
 
-        # Configure requests session with browser-like headers
+        # Rotating user agents to avoid blocking
+        self.user_agents = [
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
+            'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:122.0) Gecko/20100101 Firefox/122.0',
+            'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2 Safari/605.1.15',
+            'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
+        ]
+
+        # Configure requests session
         self.session = requests.Session()
-        self.session.headers.update({
-            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
-            'Accept-Language': 'en-US,en;q=0.9',
-            'Accept-Encoding': 'gzip, deflate, br',
-            'Connection': 'keep-alive',
-            'Cache-Control': 'max-age=0',
-            'Sec-Fetch-Dest': 'document',
-            'Sec-Fetch-Mode': 'navigate',
-            'Sec-Fetch-Site': 'none',
-            'Sec-Fetch-User': '?1',
-            'Upgrade-Insecure-Requests': '1'
-        })
+        self._rotate_user_agent()
 
         # Aviation-related keywords for filtering relevant contracts
         self.aviation_keywords = [
@@ -54,6 +53,65 @@ class DefenseContractsHandler:
         # Military branches
         self.military_branches = ['NAVY', 'AIR FORCE', 'ARMY', 'DEFENSE LOGISTICS AGENCY',
                                    'MISSILE DEFENSE AGENCY', 'MARINE CORPS', 'SPACE FORCE']
+
+    def _rotate_user_agent(self):
+        """Rotate to a random user agent"""
+        ua = random.choice(self.user_agents)
+        self.session.headers.update({
+            'User-Agent': ua,
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.9',
+            'Accept-Encoding': 'gzip, deflate, br',
+            'Connection': 'keep-alive',
+            'Cache-Control': 'no-cache',
+            'Pragma': 'no-cache',
+            'Sec-Fetch-Dest': 'document',
+            'Sec-Fetch-Mode': 'navigate',
+            'Sec-Fetch-Site': 'none',
+            'Sec-Fetch-User': '?1',
+            'Upgrade-Insecure-Requests': '1'
+        })
+
+    def _make_request(self, url: str, max_retries: int = 3) -> Optional[requests.Response]:
+        """
+        Make HTTP request with retry logic and user agent rotation
+
+        Args:
+            url: URL to fetch
+            max_retries: Maximum number of retry attempts
+
+        Returns:
+            Response object or None if all retries failed
+        """
+        for attempt in range(max_retries):
+            try:
+                self._rotate_user_agent()
+
+                # Add random delay to appear more human-like
+                delay = random.uniform(2, 5) if attempt > 0 else random.uniform(0.5, 1.5)
+                time.sleep(delay)
+
+                response = self.session.get(url, timeout=45)
+
+                if response.status_code == 200:
+                    # Add extra delay after successful request to avoid rate limiting
+                    time.sleep(random.uniform(1, 2))
+                    return response
+                elif response.status_code == 403:
+                    logger.warning(f"403 Forbidden on attempt {attempt + 1} for {url}")
+                    # Longer delay on 403
+                    time.sleep(random.uniform(3, 6))
+                    continue
+                else:
+                    response.raise_for_status()
+
+            except requests.exceptions.RequestException as e:
+                logger.warning(f"Request failed on attempt {attempt + 1}: {e}")
+                if attempt < max_retries - 1:
+                    time.sleep(random.uniform(3, 6))
+                continue
+
+        return None
 
     def fetch_recent_contracts(self, days_back: int = 7, aviation_only: bool = True) -> List[Dict[str, Any]]:
         """
@@ -108,8 +166,10 @@ class DefenseContractsHandler:
             List of dicts with 'href' and 'date' keys
         """
         try:
-            response = self.session.get(self.base_url, timeout=30)
-            response.raise_for_status()
+            response = self._make_request(self.base_url)
+            if not response:
+                logger.error("Failed to fetch contracts listing page after retries")
+                return []
 
             soup = BeautifulSoup(response.text, 'html.parser')
 
@@ -157,8 +217,10 @@ class DefenseContractsHandler:
             List of contract dictionaries
         """
         try:
-            response = self.session.get(url, timeout=30)
-            response.raise_for_status()
+            response = self._make_request(url)
+            if not response:
+                logger.error(f"Failed to fetch contract page: {url}")
+                return []
 
             soup = BeautifulSoup(response.text, 'html.parser')
 
@@ -527,21 +589,27 @@ class DefenseContractsHandler:
             Test result dictionary
         """
         try:
-            response = self.session.get(self.base_url, timeout=30)
-            response.raise_for_status()
+            response = self._make_request(self.base_url)
 
-            # Check if we got the contracts page
-            if 'Contracts' in response.text:
-                return {
-                    'success': True,
-                    'status_code': response.status_code,
-                    'message': 'Successfully connected to defense.gov contracts page'
-                }
+            if response and response.status_code == 200:
+                # Check if we got the contracts page
+                if 'Contracts' in response.text:
+                    return {
+                        'success': True,
+                        'status_code': response.status_code,
+                        'message': 'Successfully connected to defense.gov contracts page'
+                    }
+                else:
+                    return {
+                        'success': False,
+                        'status_code': response.status_code,
+                        'message': 'Connected but contracts page not found'
+                    }
             else:
                 return {
                     'success': False,
-                    'status_code': response.status_code,
-                    'message': 'Connected but contracts page not found'
+                    'status_code': response.status_code if response else None,
+                    'message': 'Failed to connect after retries (403 Forbidden likely)'
                 }
 
         except Exception as e:
