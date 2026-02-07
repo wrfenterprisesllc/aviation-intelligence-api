@@ -88,15 +88,23 @@ class FinancialDataService:
             logger.info(f"📊 Fetching balance sheet for {airline_name} ({ticker_symbol})")
 
             ticker = yf.Ticker(ticker_symbol)
+            logger.info(f"📊 Created yfinance Ticker object for {ticker_symbol}")
 
             # Get financial statements
+            logger.info(f"📊 Fetching balance_sheet...")
             balance_sheet = ticker.balance_sheet
+            logger.info(f"📊 balance_sheet type: {type(balance_sheet)}, empty: {balance_sheet is None or (hasattr(balance_sheet, 'empty') and balance_sheet.empty)}")
+
+            logger.info(f"📊 Fetching income_stmt...")
             income_stmt = ticker.income_stmt
+            logger.info(f"📊 Fetching cashflow...")
             cash_flow = ticker.cashflow
 
             if balance_sheet is None or balance_sheet.empty:
-                logger.warning(f"No balance sheet data for {ticker_symbol}")
+                logger.warning(f"No balance sheet data for {ticker_symbol} - balance_sheet is None or empty")
                 return None
+
+            logger.info(f"📊 Balance sheet columns: {list(balance_sheet.columns)[:3] if hasattr(balance_sheet, 'columns') else 'N/A'}")
 
             # Get most recent period (usually latest fiscal year)
             latest_period = balance_sheet.columns[0]
