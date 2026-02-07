@@ -19,7 +19,7 @@ EASTERN_TZ = pytz.timezone('US/Eastern')
 class InsightsService:
     """Service for generating AI-powered insights, reports, and newsletters"""
 
-    def __init__(self, gemini_service, database_service, stock_service=None, sec_service=None, bts_service=None, financial_service=None):
+    def __init__(self, gemini_service, database_service, stock_service=None, sec_service=None, bts_service=None, financial_service=None, fred_service=None):
         """
         Initialize insights service
 
@@ -30,6 +30,7 @@ class InsightsService:
             sec_service: SECFilingsService instance for SEC filings (optional)
             bts_service: BTSService instance for carrier financials (optional)
             financial_service: FinancialDataService for balance sheet data (optional)
+            fred_service: FREDCreditSpreadsFinal for credit spread benchmarks (optional)
         """
         self.gemini = gemini_service
         self.db = database_service
@@ -37,6 +38,7 @@ class InsightsService:
         self.sec_service = sec_service
         self.bts_service = bts_service
         self.financial_service = financial_service
+        self.fred_service = fred_service
         logger.info("✅ Insights service initialized")
 
     def generate_airline_report(
@@ -152,6 +154,15 @@ class InsightsService:
                 else:
                     logger.warning(f"⚠️ Could not fetch balance sheet data for '{subject}'")
 
+            # Get credit spread benchmarks (multi-tier) for credit analysis
+            credit_benchmarks = None
+            if self.fred_service and report_type in ['credit_analysis', 'comprehensive']:
+                credit_benchmarks = self.fred_service.get_credit_spread_benchmarks()
+                if credit_benchmarks and credit_benchmarks.get('success'):
+                    logger.info(f"✅ Retrieved credit spread benchmarks")
+                else:
+                    logger.warning(f"⚠️ Could not fetch credit spread benchmarks")
+
             # Log data availability for debugging
             if not news_articles:
                 logger.warning(f"⚠️ No news articles found for {subject} from {start_date.date()} to {end_date.date()}")
@@ -170,7 +181,8 @@ class InsightsService:
                        f"Stock: {'Yes' if stock_data else 'No'}, "
                        f"SEC: {'Yes' if sec_filings else 'No'}, "
                        f"BTS: {'Yes' if carrier_financials else 'No'}, "
-                       f"BalanceSheet: {'Yes' if balance_sheet_data else 'No'}")
+                       f"BalanceSheet: {'Yes' if balance_sheet_data else 'No'}, "
+                       f"CreditBenchmarks: {'Yes' if credit_benchmarks else 'No'}")
 
             # Build prompt based on report type
             if report_type == 'credit_analysis':
@@ -183,6 +195,7 @@ class InsightsService:
                     sec_filings=sec_filings,
                     carrier_financials=carrier_financials,
                     balance_sheet_data=balance_sheet_data,
+                    credit_benchmarks=credit_benchmarks,
                     period_start=start_date,
                     period_end=end_date
                 )
@@ -256,6 +269,7 @@ class InsightsService:
                     'sec_filings_included': sec_filings is not None,
                     'bts_included': carrier_financials is not None,
                     'balance_sheet_included': balance_sheet_data is not None,
+                    'credit_benchmarks_included': credit_benchmarks is not None,
                     'model': 'gemini-2.0-flash-exp'
                 },
                 'cached_until': cached_until
@@ -514,6 +528,7 @@ Generate the report now:"""
         sec_filings: Optional[Dict],
         carrier_financials: Optional[Dict],
         balance_sheet_data: Optional[Dict] = None,
+        credit_benchmarks: Optional[Dict] = None,
         period_start: datetime = None,
         period_end: datetime = None
     ) -> str:
@@ -528,11 +543,19 @@ Generate the report now:"""
         carrier_summary = self._format_carrier_financials(carrier_financials)
         balance_sheet_summary = self._format_balance_sheet_data(balance_sheet_data)
 
+        # Format comprehensive credit analysis section (new)
+        credit_analysis_summary = self._format_credit_analysis(
+            balance_sheet_data=balance_sheet_data,
+            credit_benchmarks=credit_benchmarks
+        )
+
         prompt = f"""You are a senior airline credit analyst. Generate a comprehensive credit analysis report for {subject} covering {period_start.strftime('%B %d, %Y')} to {period_end.strftime('%B %d, %Y')}.
 
 **Perspective**: Analyze from a lender/bondholder perspective, focusing on creditworthiness and financial risk.
 
 **Available Data**:
+
+{credit_analysis_summary}
 
 {balance_sheet_summary}
 
@@ -551,13 +574,15 @@ Generate the report now:"""
 **Required Report Sections** (use these exact H2 headers):
 
 ## Executive Summary
-Provide a 3-4 paragraph overview of the credit profile, key risks, and rating outlook.
+Provide a 3-4 paragraph overview of the credit profile, key risks, and rating outlook. Include the estimated credit rating from the data.
 
 ## Credit Rating & Spread Analysis
-- Current credit rating and recent changes
-- Bond spread trends vs. industry benchmarks
-- Comparison to FRED credit spread data
-- Risk premium assessment
+Use the provided credit rating estimation and spread benchmarks to:
+- Present the estimated credit rating based on financial metrics
+- Compare company's credit profile to AA, A, BBB, and BB benchmarks
+- Analyze where the airline falls in the rating spectrum
+- Discuss spread levels relative to each rating tier
+- Assess market stress conditions
 
 ## Financial Health Metrics
 - Debt-to-EBITDA ratio trends
@@ -591,6 +616,7 @@ Provide a 3-4 paragraph overview of the credit profile, key risks, and rating ou
 - Use bullet points for clarity
 - Highlight risk levels using: **Risk Level: High/Medium/Low**
 - Include specific metrics and numbers from the data provided
+- Reference the estimated credit rating and spread benchmarks
 - Be analytical and data-driven
 
 Generate the credit analysis report now:"""
@@ -1136,6 +1162,90 @@ Source: DOT Bureau of Transportation Statistics Form 41
 Source: Yahoo Finance (Latest Annual/Quarterly Filing)
 """
         return formatted
+
+    def _format_credit_analysis(
+        self,
+        balance_sheet_data: Optional[Dict],
+        credit_benchmarks: Optional[Dict]
+    ) -> str:
+        """
+        Format comprehensive credit analysis data including:
+        1. Synthetic credit rating estimation from financial metrics
+        2. Multi-tier credit spread benchmarks
+        3. Market stress assessment
+        """
+        sections = []
+
+        # 1. Synthetic Rating Estimation
+        if balance_sheet_data and self.financial_service:
+            debt_to_ebitda = balance_sheet_data.get('debt_to_ebitda')
+            interest_coverage = balance_sheet_data.get('interest_coverage')
+
+            if debt_to_ebitda is not None and interest_coverage is not None:
+                rating_estimate = self.financial_service.estimate_credit_rating(
+                    debt_to_ebitda=debt_to_ebitda,
+                    interest_coverage=interest_coverage
+                )
+
+                sections.append(f"""**ESTIMATED CREDIT RATING**:
+- **Rating: {rating_estimate.get('estimated_rating', 'N/A')}**
+- Outlook: {rating_estimate.get('rating_outlook', 'N/A')}
+- Confidence: {rating_estimate.get('confidence', 'N/A')}
+- Key Metrics Used:
+  - Debt-to-EBITDA: {rating_estimate.get('debt_to_ebitda', 'N/A')}x
+  - Interest Coverage: {rating_estimate.get('interest_coverage', 'N/A')}x
+- Methodology: {rating_estimate.get('methodology', 'N/A')}
+- Note: {rating_estimate.get('note', '')}
+""")
+            else:
+                sections.append("**ESTIMATED CREDIT RATING**: Unable to calculate - missing Debt/EBITDA or Interest Coverage data.")
+        else:
+            sections.append("**ESTIMATED CREDIT RATING**: Not available - balance sheet data required.")
+
+        # 2. Credit Spread Benchmarks
+        if credit_benchmarks and credit_benchmarks.get('success'):
+            spreads = credit_benchmarks.get('spreads', {})
+            data_date = credit_benchmarks.get('data_date', 'Unknown')
+            market_stress = credit_benchmarks.get('market_stress', 'unknown')
+            stress_desc = credit_benchmarks.get('stress_description', '')
+
+            sections.append(f"""**CREDIT SPREAD BENCHMARKS** (as of {data_date}):
+Current option-adjusted spreads by rating tier:
+- AA Corporate Spreads: {spreads.get('aa_spread_bps', 'N/A')} bps (highest investment grade)
+- A Corporate Spreads: {spreads.get('a_spread_bps', 'N/A')} bps
+- BBB Corporate Spreads: {spreads.get('bbb_spread_bps', 'N/A')} bps (typical airline rating)
+- BB High Yield Spreads: {spreads.get('bb_spread_bps', 'N/A')} bps (speculative grade)
+- Overall Market Spreads: {spreads.get('market_spread_bps', 'N/A')} bps
+
+**Market Stress Level**: {market_stress.upper()}
+{stress_desc}
+
+Source: Federal Reserve Economic Data (FRED) - ICE BofA Indices
+""")
+        elif credit_benchmarks and not credit_benchmarks.get('success'):
+            # Fallback data
+            spreads = credit_benchmarks.get('spreads', {})
+            sections.append(f"""**CREDIT SPREAD BENCHMARKS** (fallback estimates):
+- AA Corporate Spreads: ~{spreads.get('aa_spread_bps', 85)} bps
+- A Corporate Spreads: ~{spreads.get('a_spread_bps', 120)} bps
+- BBB Corporate Spreads: ~{spreads.get('bbb_spread_bps', 165)} bps
+- BB High Yield Spreads: ~{spreads.get('bb_spread_bps', 350)} bps
+
+Note: Using estimated spreads (FRED API temporarily unavailable)
+""")
+        else:
+            sections.append("**CREDIT SPREAD BENCHMARKS**: Not available.")
+
+        # 3. Rating-Spread Comparison Context
+        if balance_sheet_data and credit_benchmarks:
+            sections.append("""**RATING-SPREAD INTERPRETATION GUIDE**:
+- If estimated rating is BBB: Compare company to BBB benchmark spreads
+- If estimated rating is BB: Company has higher credit risk, monitor BB spread levels
+- Widening spreads vs benchmark = deteriorating credit perception
+- Tightening spreads vs benchmark = improving credit perception
+""")
+
+        return "\n".join(sections) if sections else "**Credit Analysis Data**: Not available."
 
     def _parse_sections(self, markdown_content: str) -> Dict[str, str]:
         """

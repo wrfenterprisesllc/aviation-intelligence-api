@@ -141,6 +141,106 @@ class FREDCreditSpreadsFinal:
                 'timestamp': datetime.now().isoformat()
             }
 
+    def get_credit_spread_benchmarks(self):
+        """
+        Get multi-tier credit spread benchmarks for comprehensive credit analysis.
+        Fetches AA, A, BBB, BB spreads plus market stress indicator.
+        """
+        try:
+            # Series to fetch (Option-Adjusted Spreads in basis points)
+            series_config = {
+                'aa': 'BAMLC0A2CAA',      # AA Corporate OAS
+                'a': 'BAMLC0A3CA',         # A Corporate OAS
+                'bbb': 'BAMLC0A4CBBB',     # BBB Corporate OAS
+                'bb': 'BAMLH0A1HYBB',      # BB High Yield OAS
+                'market': 'BAMLC0A0CM'     # Corporate Master OAS (market stress)
+            }
+
+            spreads = {}
+            data_date = None
+
+            for tier, series_id in series_config.items():
+                params = {
+                    'series_id': series_id,
+                    'api_key': self.api_key,
+                    'file_type': 'json',
+                    'limit': 1,
+                    'sort_order': 'desc'
+                }
+
+                response = requests.get(self.base_url, params=params, timeout=10)
+                if response.status_code == 200:
+                    data = response.json()
+                    if data.get('observations') and len(data['observations']) > 0:
+                        obs = data['observations'][0]
+                        if obs.get('value') and obs['value'] != '.':
+                            # OAS series are already in basis points (as percentage, multiply by 100)
+                            spreads[f'{tier}_spread_bps'] = round(float(obs['value']) * 100)
+                            if not data_date:
+                                data_date = obs.get('date')
+
+            # Determine market stress level based on overall corporate spreads
+            market_spread = spreads.get('market_spread_bps', 150)
+            if market_spread < 100:
+                market_stress = 'low'
+                stress_description = 'Tight credit conditions - low systemic risk'
+            elif market_spread < 150:
+                market_stress = 'normal'
+                stress_description = 'Normal credit conditions'
+            elif market_spread < 250:
+                market_stress = 'elevated'
+                stress_description = 'Elevated credit concerns - widening spreads'
+            elif market_spread < 400:
+                market_stress = 'high'
+                stress_description = 'High credit stress - significant risk premium'
+            else:
+                market_stress = 'severe'
+                stress_description = 'Severe market stress - potential crisis conditions'
+
+            result = {
+                'success': True,
+                'spreads': spreads,
+                'market_stress': market_stress,
+                'stress_description': stress_description,
+                'data_date': data_date or datetime.now().strftime('%Y-%m-%d'),
+                'series_used': {
+                    'aa': 'BAMLC0A2CAA (AA Corporate OAS)',
+                    'a': 'BAMLC0A3CA (A Corporate OAS)',
+                    'bbb': 'BAMLC0A4CBBB (BBB Corporate OAS)',
+                    'bb': 'BAMLH0A1HYBB (BB High Yield OAS)',
+                    'market': 'BAMLC0A0CM (Corporate Master OAS)'
+                },
+                'source': 'Federal Reserve Economic Data (FRED)',
+                'timestamp': datetime.now().isoformat()
+            }
+
+            logger.info(f"✅ FRED credit benchmarks fetched: AA={spreads.get('aa_spread_bps')}bps, "
+                       f"BBB={spreads.get('bbb_spread_bps')}bps, BB={spreads.get('bb_spread_bps')}bps, "
+                       f"Market stress: {market_stress}")
+
+            return result
+
+        except Exception as e:
+            logger.error(f"❌ Error fetching FRED credit benchmarks: {e}")
+            # Return fallback with typical spreads
+            return {
+                'success': False,
+                'spreads': {
+                    'aa_spread_bps': 85,
+                    'a_spread_bps': 120,
+                    'bbb_spread_bps': 165,
+                    'bb_spread_bps': 350,
+                    'market_spread_bps': 145
+                },
+                'market_stress': 'normal',
+                'stress_description': 'Normal credit conditions (fallback data)',
+                'data_date': datetime.now().strftime('%Y-%m-%d'),
+                'source': 'Professional Estimate (FRED API unavailable)',
+                'error': str(e),
+                'timestamp': datetime.now().isoformat()
+            }
+
+
 def test_final_integration():
     """Test the final FRED credit spread integration"""
     

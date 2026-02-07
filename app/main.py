@@ -79,9 +79,10 @@ try:
         stock_service=stock_service,
         sec_service=sec_service,
         bts_service=bts_service,
-        financial_service=financial_service
+        financial_service=financial_service,
+        fred_service=fred_service
     )
-    logger.info("✅ Gemini, Stock, SEC, BTS, Financial, and Insights services initialized")
+    logger.info("✅ Gemini, Stock, SEC, BTS, Financial, FRED, and Insights services initialized")
 except Exception as e:
     logger.warning(f"⚠️ Gemini/Insights service initialization failed: {e}")
     gemini_service = None
@@ -2179,6 +2180,106 @@ def get_balance_sheet(airline_name: str):
 
     except Exception as e:
         logger.error(f"❌ Error in balance sheet endpoint: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+        return jsonify({
+            'success': False,
+            'error': 'Internal server error',
+            'message': str(e),
+            'timestamp': datetime.now().isoformat()
+        }), 500
+
+
+@app.route('/api/credit-benchmarks')
+def get_credit_benchmarks():
+    """Get multi-tier credit spread benchmarks from FRED"""
+    start_time = datetime.now()
+
+    try:
+        if not fred_service:
+            return jsonify({
+                'success': False,
+                'error': 'FRED service not initialized',
+                'timestamp': datetime.now().isoformat()
+            }), 503
+
+        benchmarks = fred_service.get_credit_spread_benchmarks()
+        response_time = (datetime.now() - start_time).total_seconds() * 1000
+
+        return jsonify({
+            **benchmarks,
+            'response_time_ms': round(response_time, 1)
+        })
+
+    except Exception as e:
+        logger.error(f"❌ Error in credit benchmarks endpoint: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+        return jsonify({
+            'success': False,
+            'error': 'Internal server error',
+            'message': str(e),
+            'timestamp': datetime.now().isoformat()
+        }), 500
+
+
+@app.route('/api/credit-rating/<airline_name>')
+def get_credit_rating(airline_name: str):
+    """Get estimated credit rating for an airline based on financial metrics"""
+    start_time = datetime.now()
+
+    try:
+        if not financial_service:
+            return jsonify({
+                'success': False,
+                'error': 'Financial service not initialized',
+                'timestamp': datetime.now().isoformat()
+            }), 503
+
+        # URL decode the airline name
+        from urllib.parse import unquote
+        airline_name = unquote(airline_name)
+
+        # Get balance sheet data
+        balance_sheet = financial_service.get_balance_sheet_data(airline_name)
+
+        if not balance_sheet:
+            return jsonify({
+                'success': False,
+                'error': f'Could not fetch financial data for {airline_name}',
+                'timestamp': datetime.now().isoformat()
+            }), 404
+
+        # Get credit rating estimate
+        debt_to_ebitda = balance_sheet.get('debt_to_ebitda')
+        interest_coverage = balance_sheet.get('interest_coverage')
+
+        rating_estimate = financial_service.estimate_credit_rating(
+            debt_to_ebitda=debt_to_ebitda if debt_to_ebitda else 0,
+            interest_coverage=interest_coverage if interest_coverage else 0
+        )
+
+        response_time = (datetime.now() - start_time).total_seconds() * 1000
+
+        return jsonify({
+            'success': True,
+            'airline_name': airline_name,
+            'ticker': balance_sheet.get('ticker'),
+            'rating_estimate': rating_estimate,
+            'underlying_metrics': {
+                'debt_to_ebitda': debt_to_ebitda,
+                'interest_coverage': interest_coverage,
+                'total_debt': balance_sheet.get('total_debt'),
+                'ebitda': balance_sheet.get('ebitda'),
+                'ebit': balance_sheet.get('ebit'),
+                'interest_expense': balance_sheet.get('interest_expense')
+            },
+            'timestamp': datetime.now().isoformat(),
+            'response_time_ms': round(response_time, 1)
+        })
+
+    except Exception as e:
+        logger.error(f"❌ Error in credit rating endpoint: {e}")
         import traceback
         logger.error(traceback.format_exc())
         return jsonify({

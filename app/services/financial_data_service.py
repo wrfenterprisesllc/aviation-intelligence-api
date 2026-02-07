@@ -254,6 +254,77 @@ class FinancialDataService:
 
         return result
 
+    def estimate_credit_rating(self, debt_to_ebitda: float, interest_coverage: float) -> dict:
+        """
+        Estimate credit rating from financial metrics.
+        Based on industry-standard credit rating criteria from Moody's/S&P/Fitch.
+
+        Args:
+            debt_to_ebitda: Total Debt / EBITDA ratio
+            interest_coverage: EBIT / Interest Expense ratio
+
+        Returns:
+            Dictionary with estimated rating and analysis
+        """
+        # Determine rating based on combined metrics
+        # Using airline-specific thresholds (airlines typically have higher leverage)
+        if debt_to_ebitda is None or interest_coverage is None:
+            return {
+                'estimated_rating': 'N/A',
+                'rating_outlook': 'Insufficient data for rating estimation',
+                'confidence': 'low',
+                'methodology': 'Unable to calculate - missing financial metrics'
+            }
+
+        # Rating determination logic based on industry research
+        # Airlines typically run higher leverage than other sectors
+        if debt_to_ebitda < 2.0 and interest_coverage > 6.0:
+            rating = 'A'
+            outlook = 'Strong investment grade - conservative leverage profile'
+            confidence = 'high'
+        elif debt_to_ebitda < 2.5 and interest_coverage > 4.5:
+            rating = 'A-'
+            outlook = 'Solid investment grade - healthy credit metrics'
+            confidence = 'high'
+        elif debt_to_ebitda < 3.0 and interest_coverage > 3.5:
+            rating = 'BBB+'
+            outlook = 'Investment grade - adequate credit cushion'
+            confidence = 'medium-high'
+        elif debt_to_ebitda < 3.5 and interest_coverage > 3.0:
+            rating = 'BBB'
+            outlook = 'Investment grade - typical for major airlines'
+            confidence = 'medium-high'
+        elif debt_to_ebitda < 4.0 and interest_coverage > 2.5:
+            rating = 'BBB-'
+            outlook = 'Lower investment grade - moderate credit risk'
+            confidence = 'medium'
+        elif debt_to_ebitda < 5.0 and interest_coverage > 2.0:
+            rating = 'BB+'
+            outlook = 'Speculative grade - watch for deterioration'
+            confidence = 'medium'
+        elif debt_to_ebitda < 6.0 and interest_coverage > 1.5:
+            rating = 'BB'
+            outlook = 'Speculative grade - elevated credit risk'
+            confidence = 'medium'
+        elif debt_to_ebitda < 7.0 and interest_coverage > 1.0:
+            rating = 'BB-'
+            outlook = 'Lower speculative grade - significant credit concerns'
+            confidence = 'medium'
+        else:
+            rating = 'B'
+            outlook = 'High yield - elevated default risk'
+            confidence = 'medium'
+
+        return {
+            'estimated_rating': rating,
+            'rating_outlook': outlook,
+            'confidence': confidence,
+            'debt_to_ebitda': round(debt_to_ebitda, 2),
+            'interest_coverage': round(interest_coverage, 2),
+            'methodology': 'Synthetic rating based on Debt/EBITDA and Interest Coverage ratios',
+            'note': 'This is an estimated rating based on publicly available financial metrics. Actual agency ratings may differ.'
+        }
+
     def format_for_credit_report(self, airline_name: str) -> str:
         """
         Format comprehensive financial data for credit report prompt
