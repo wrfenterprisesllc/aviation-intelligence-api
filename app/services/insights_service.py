@@ -317,13 +317,16 @@ class InsightsService:
             logger.info(f"📰 Generating weekly newsletter (offset: {week_offset})")
 
             # Calculate week boundaries (Monday to Sunday) using Eastern Time
+            # week_offset=0 means current week, week_offset=1 means last week, etc.
             today = datetime.now(EASTERN_TZ)
             days_since_monday = today.weekday()
-            last_monday = today - timedelta(days=days_since_monday + 7 + (week_offset * 7))
-            last_sunday = last_monday + timedelta(days=6)
+            # Get Monday of current week, then adjust by week_offset
+            this_monday = today - timedelta(days=days_since_monday)
+            target_monday = this_monday - timedelta(weeks=week_offset)
+            target_sunday = target_monday + timedelta(days=6)
 
-            week_start = last_monday.replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=None)
-            week_end = last_sunday.replace(hour=23, minute=59, second=59, microsecond=999999, tzinfo=None)
+            week_start = target_monday.replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=None)
+            week_end = target_sunday.replace(hour=23, minute=59, second=59, microsecond=999999, tzinfo=None)
 
             logger.info(f"📅 Newsletter period: {week_start.date()} to {week_end.date()}")
 
