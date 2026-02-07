@@ -241,6 +241,7 @@ class InsightsService:
                     'fred_included': fred_data is not None,
                     'stock_included': stock_data is not None,
                     'sec_filings_included': sec_filings is not None,
+                    'bts_included': carrier_financials is not None,
                     'model': 'gemini-2.0-flash-exp'
                 },
                 'cached_until': cached_until
