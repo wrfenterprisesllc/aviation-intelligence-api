@@ -217,7 +217,7 @@ class InsightsService:
 
             # Get balance sheet data - prefer cached from daily ingestion
             balance_sheet_data = None
-            if report_type in ['credit_analysis', 'comprehensive']:
+            if report_type in ['airline', 'credit_analysis', 'comprehensive']:
                 # Try cached data first (from daily financial ingestion)
                 balance_sheet_data = self._get_carrier_financials_cached(subject)
                 if balance_sheet_data:
@@ -227,7 +227,7 @@ class InsightsService:
 
             # Get credit spread benchmarks - prefer cached from daily ingestion
             credit_benchmarks = None
-            if report_type in ['credit_analysis', 'comprehensive']:
+            if report_type in ['airline', 'credit_analysis', 'comprehensive']:
                 # Try cached data first (from daily financial ingestion)
                 credit_benchmarks = self._get_fred_data_cached()
                 if credit_benchmarks and credit_benchmarks.get('success'):
@@ -275,7 +275,12 @@ class InsightsService:
                 prompt = self._build_leasing_recommendation_prompt(
                     subject=subject,
                     news_articles=news_articles,
+                    tsa_data=tsa_data,
+                    fred_data=fred_data,
                     stock_data=stock_data,
+                    sec_filings=sec_filings,
+                    carrier_financials=carrier_financials,
+                    balance_sheet_data=balance_sheet_data,
                     period_start=start_date,
                     period_end=end_date
                 )
@@ -287,6 +292,9 @@ class InsightsService:
                     fred_data=fred_data,
                     stock_data=stock_data,
                     sec_filings=sec_filings,
+                    carrier_financials=carrier_financials,
+                    balance_sheet_data=balance_sheet_data,
+                    credit_benchmarks=credit_benchmarks,
                     period_start=start_date,
                     period_end=end_date
                 )
@@ -300,6 +308,8 @@ class InsightsService:
                     fred_data=fred_data,
                     stock_data=stock_data,
                     sec_filings=sec_filings,
+                    carrier_financials=carrier_financials,
+                    balance_sheet_data=balance_sheet_data,
                     period_start=start_date,
                     period_end=end_date
                 )
@@ -421,6 +431,43 @@ class InsightsService:
             fred_records = self.db.get_fred_data(limit=1)
             fred_data = {'data': fred_records[0]} if fred_records else None
 
+            # Get stock data for major carriers
+            stock_data = None
+            if self.stock_service:
+                try:
+                    major_carriers = ['United Airlines', 'Delta Air Lines', 'American Airlines', 'Southwest Airlines']
+                    stock_data = {}
+                    for carrier in major_carriers:
+                        carrier_stock = self.stock_service.get_stock_data(carrier, period='1wk')
+                        if carrier_stock:
+                            stock_data[carrier] = carrier_stock
+                    logger.info(f"✅ Retrieved stock data for {len(stock_data)} carriers")
+                except Exception as e:
+                    logger.warning(f"⚠️ Could not fetch stock data: {e}")
+
+            # Get notable SEC filings from the week
+            sec_filings = []
+            if self.sec_service:
+                try:
+                    for carrier in ['United Airlines', 'Delta Air Lines', 'American Airlines']:
+                        filings = self.sec_service.get_recent_filings(
+                            airline_name=carrier,
+                            filing_types=['8-K', '10-Q', '10-K'],
+                            max_results=3
+                        )
+                        if filings and filings.get('filings'):
+                            for filing in filings['filings']:
+                                # Check if filed this week
+                                filing_date = filing.get('filing_date', '')
+                                if filing_date >= week_start.strftime('%Y-%m-%d'):
+                                    sec_filings.append({
+                                        **filing,
+                                        'company_name': carrier
+                                    })
+                    logger.info(f"✅ Retrieved {len(sec_filings)} SEC filings for the week")
+                except Exception as e:
+                    logger.warning(f"⚠️ Could not fetch SEC filings: {e}")
+
             # Log data availability
             if not news_articles:
                 logger.warning(f"⚠️ No news articles found for week {week_start.date()} to {week_end.date()}")
@@ -431,7 +478,9 @@ class InsightsService:
 
             logger.info(f"📊 Data collected: {len(news_articles) if news_articles else 0} articles, "
                        f"{len(tsa_data) if tsa_data else 0} TSA records, "
-                       f"FRED: {'Yes' if fred_data else 'No'}")
+                       f"FRED: {'Yes' if fred_data else 'No'}, "
+                       f"Stocks: {len(stock_data) if stock_data else 0} carriers, "
+                       f"SEC: {len(sec_filings) if sec_filings else 0} filings")
 
             # Build comprehensive newsletter prompt
             prompt = self._build_newsletter_prompt(
@@ -440,6 +489,8 @@ class InsightsService:
                 news_articles=news_articles,
                 tsa_data=tsa_data,
                 fred_data=fred_data,
+                stock_data=stock_data,
+                sec_filings=sec_filings,
                 previous_newsletter=previous_newsletter,
                 sections=sections
             )
@@ -481,6 +532,8 @@ class InsightsService:
                 'metadata': {
                     'tsa_days': len(tsa_data) if tsa_data else 0,
                     'fred_included': fred_data is not None,
+                    'stock_carriers': len(stock_data) if stock_data else 0,
+                    'sec_filings': len(sec_filings) if sec_filings else 0,
                     'model': 'gemini-2.0-flash-exp'
                 }
             }
@@ -505,6 +558,8 @@ class InsightsService:
         fred_data: Optional[Dict],
         stock_data: Optional[Dict] = None,
         sec_filings: Optional[Dict] = None,
+        carrier_financials: Optional[Dict] = None,
+        balance_sheet_data: Optional[Dict] = None,
         period_start: datetime = None,
         period_end: datetime = None
     ) -> str:
@@ -525,6 +580,12 @@ class InsightsService:
         # Format SEC filings
         sec_summary = self._format_sec_filings(sec_filings)
 
+        # Format BTS carrier financials
+        carrier_summary = self._format_carrier_financials(carrier_financials)
+
+        # Format balance sheet data
+        balance_sheet_summary = self._format_balance_sheet_data(balance_sheet_data)
+
         prompt = f"""You are an expert aviation industry analyst. Generate a comprehensive intelligence report about {subject}.
 
 **Report Type**: {report_type.title()}
@@ -543,13 +604,17 @@ class InsightsService:
 
 {sec_summary}
 
+{carrier_summary}
+
+{balance_sheet_summary}
+
 **Instructions**:
 Generate a professional, data-driven report in Markdown format with the following sections:
 
 ## Executive Summary
 - 2-3 paragraph overview of key findings
 - Highlight most significant developments
-- Include stock performance summary if available
+- Include stock performance and key financial metrics if available
 
 ## News Analysis
 - Analyze major news stories and their implications
@@ -559,7 +624,13 @@ Generate a professional, data-driven report in Markdown format with the followin
 ## Financial Performance
 - Analyze stock price performance and volatility (if available)
 - Review recent SEC filings and their implications (if available)
+- Include key balance sheet metrics (debt, cash, EBITDA) if available
 - Compare performance to sector benchmarks
+
+## Operational Metrics
+- Analyze BTS Form 41 carrier financials if available (revenue, margins, load factor)
+- Evaluate RASM/CASM spread and operational efficiency
+- Compare operational performance to peers
 
 ## Market Data Insights
 - Analyze TSA passenger data trends
@@ -573,7 +644,7 @@ Generate a professional, data-driven report in Markdown format with the followin
 
 ## Risk Assessment
 - Identify potential risks and challenges
-- Consider financial metrics and stock volatility
+- Consider financial metrics, leverage ratios, and stock volatility
 - Rate overall risk level (Low/Moderate/High)
 
 ## Outlook & Recommendations
@@ -584,7 +655,7 @@ Generate a professional, data-driven report in Markdown format with the followin
 **Style Guidelines**:
 - Professional, analytical tone
 - Use data to support all claims
-- Include specific numbers and percentages
+- Include specific numbers and percentages from carrier financials and balance sheet
 - Cite news sources when quoting
 - Be objective and balanced
 - Use markdown formatting (headers, lists, bold, etc.)
@@ -702,7 +773,12 @@ Generate the credit analysis report now:"""
         self,
         subject: str,
         news_articles: List[Dict],
+        tsa_data: List[Dict],
+        fred_data: Optional[Dict],
         stock_data: Optional[Dict],
+        sec_filings: Optional[Dict],
+        carrier_financials: Optional[Dict],
+        balance_sheet_data: Optional[Dict],
         period_start: datetime,
         period_end: datetime
     ) -> str:
@@ -710,11 +786,16 @@ Generate the credit analysis report now:"""
 
         # Format data sources
         news_summary = self._format_news_articles(news_articles)
+        tsa_summary = self._format_tsa_data(tsa_data)
+        fred_summary = self._format_fred_data(fred_data)
         stock_summary = self._format_stock_data(stock_data)
+        sec_summary = self._format_sec_filings(sec_filings)
+        carrier_summary = self._format_carrier_financials(carrier_financials)
+        balance_sheet_summary = self._format_balance_sheet_data(balance_sheet_data)
 
         prompt = f"""You are a senior aircraft leasing analyst. Generate a comprehensive leasing recommendation report for {subject} covering {period_start.strftime('%B %d, %Y')} to {period_end.strftime('%B %d, %Y')}.
 
-**Perspective**: Analyze from an aircraft lessor perspective, focusing on lease rates, fleet strategy, and market conditions.
+**Perspective**: Analyze from an aircraft lessor perspective, focusing on lease rates, fleet strategy, lessee creditworthiness, and market conditions.
 
 **Available Data**:
 
@@ -722,12 +803,20 @@ Generate the credit analysis report now:"""
 
 {stock_summary}
 
-**Note**: Since proprietary lease rate databases are not available, provide qualitative analysis based on industry trends, news reports, and financial data.
+{tsa_summary}
+
+{fred_summary}
+
+{sec_summary}
+
+{carrier_summary}
+
+{balance_sheet_summary}
 
 **Required Report Sections** (use these exact H2 headers):
 
 ## Executive Summary
-Provide a 3-4 paragraph overview of the airline's attractiveness as a lessee, key opportunities, and risks.
+Provide a 3-4 paragraph overview of the airline's attractiveness as a lessee, key opportunities, and risks. Reference specific financial metrics.
 
 ## Fleet Composition & Strategy
 - Current fleet breakdown (aircraft types, ages) based on news and public data
@@ -739,13 +828,22 @@ Provide a 3-4 paragraph overview of the airline's attractiveness as a lessee, ke
 - Current lease rate environment for key aircraft types
 - Supply/demand dynamics in aircraft leasing market
 - Industry-wide trends affecting lease rates
+- Credit spread environment and financing cost implications (use FRED data)
 - Airline's historical lease vs. own strategy
 
 ## Lessee Credit Profile
-- Financial stability as a lessee
+- Financial stability as a lessee (use balance sheet metrics)
+- Debt-to-EBITDA ratio and interest coverage
+- Liquidity position (cash, available credit)
 - On-time lease payment history (based on news/reports)
-- Debt levels and ability to meet obligations
 - Stock performance trends
+- **Credit Assessment**: Investment Grade / Crossover / Speculative (based on financial ratios)
+
+## Operational Performance
+- Operating revenue and margin trends (from BTS data if available)
+- Load factor and RASM/CASM spread
+- Fuel and labor cost efficiency
+- Passenger demand trends (from TSA data)
 
 ## Route Network & Capacity Trends
 - Network expansion or contraction
@@ -759,14 +857,16 @@ Provide a 3-4 paragraph overview of the airline's attractiveness as a lessee, ke
 - Recommended lease structure (operating vs. finance)
 - Suggested lease terms and conditions
 - Key risk mitigations
+- Security deposits or maintenance reserve requirements
 - **Risk Level: High/Medium/Low** (use this exact format)
 
 **Formatting Requirements**:
 - Use markdown formatting
-- Include specific fleet data where available
+- Include specific fleet data and financial metrics where available
+- Reference balance sheet ratios (Debt/EBITDA, interest coverage) in credit assessment
 - Use bullet points for clarity
 - Highlight risk levels using: **Risk Level: High/Medium/Low**
-- Provide actionable recommendations
+- Provide actionable recommendations with specific terms
 - Be practical and market-focused
 
 Generate the leasing recommendation report now:"""
@@ -781,6 +881,9 @@ Generate the leasing recommendation report now:"""
         fred_data: Optional[Dict],
         stock_data: Optional[Dict],
         sec_filings: Optional[Dict],
+        carrier_financials: Optional[Dict],
+        balance_sheet_data: Optional[Dict],
+        credit_benchmarks: Optional[Dict],
         period_start: datetime,
         period_end: datetime
     ) -> str:
@@ -792,6 +895,9 @@ Generate the leasing recommendation report now:"""
         fred_summary = self._format_fred_data(fred_data)
         stock_summary = self._format_stock_data(stock_data)
         sec_summary = self._format_sec_filings(sec_filings)
+        carrier_summary = self._format_carrier_financials(carrier_financials)
+        balance_sheet_summary = self._format_balance_sheet_data(balance_sheet_data)
+        credit_analysis_summary = self._format_credit_analysis(balance_sheet_data, credit_benchmarks)
 
         prompt = f"""You are a senior aviation intelligence analyst. Generate a comprehensive multi-perspective report for {subject} covering {period_start.strftime('%B %d, %Y')} to {period_end.strftime('%B %d, %Y')}.
 
@@ -809,15 +915,22 @@ Generate the leasing recommendation report now:"""
 
 {sec_summary}
 
+{carrier_summary}
+
+{balance_sheet_summary}
+
+{credit_analysis_summary}
+
 **Required Report Sections** (use these exact H2 headers):
 
 ## Executive Summary
-Provide a 4-5 paragraph overview integrating credit, leasing, and market perspectives.
+Provide a 4-5 paragraph overview integrating credit, leasing, and market perspectives. Include the estimated credit rating and key financial metrics.
 
 ## Credit Analysis
 ### Credit Rating & Financial Health
-- Credit rating trends and bond spreads
-- Key financial metrics (leverage, liquidity, profitability)
+- Present the estimated credit rating from financial metrics
+- Compare to benchmark spreads (AA, A, BBB, BB tiers)
+- Key financial metrics (Debt/EBITDA, interest coverage, liquidity)
 - Debt structure and covenant compliance
 
 ### Credit Risk Assessment
@@ -832,37 +945,41 @@ Provide a 4-5 paragraph overview integrating credit, leasing, and market perspec
 - Fleet age and efficiency
 
 ### Lessee Attractiveness
-- Financial stability as a lessee
+- Financial stability as a lessee (reference balance sheet metrics)
+- Operating margins and cash flow (from BTS data)
 - Lease vs. own strategy
 - Recommended aircraft types and lease structures
 - **Leasing Risk Level: High/Medium/Low** (use this exact format)
 
 ## Market & Operational Analysis
 ### Revenue & Capacity Trends
-- TSA passenger data trends
-- Load factor and yield performance
+- TSA passenger data trends and demand analysis
+- Load factor, RASM, and yield performance (from BTS data)
 - Route network developments
 
 ### Competitive Position
+- Operating margin vs. peers
+- CASM competitiveness
 - Market share in key segments
-- Pricing power and competitive advantages
 - Industry positioning
 
 ## Integrated Risk Assessment
 - Combined risk view across credit, leasing, and operational dimensions
+- How credit spreads correlate with operational performance
 - Interconnected risk factors
 - Scenario analysis (best/base/worst case)
 - **Overall Risk Level: High/Medium/Low** (use this exact format)
 
 ## Strategic Recommendations
-- For bondholders/lenders
-- For aircraft lessors
+- For bondholders/lenders (reference credit rating and spreads)
+- For aircraft lessors (reference balance sheet strength)
 - For equity investors
 - Key metrics to monitor
 
 **Formatting Requirements**:
 - Use markdown formatting with clear section hierarchy
-- Include specific data points and percentages
+- Include specific data points and percentages from all data sources
+- Reference the estimated credit rating and spread benchmarks
 - Use bullet points for clarity
 - Highlight risk levels using: **Risk Level: High/Medium/Low**
 - Integrate perspectives across sections
@@ -879,6 +996,8 @@ Generate the comprehensive report now:"""
         news_articles: List[Dict],
         tsa_data: List[Dict],
         fred_data: Optional[Dict],
+        stock_data: Optional[Dict],
+        sec_filings: Optional[List[Dict]],
         previous_newsletter: Optional[Dict],
         sections: Dict[str, bool] = None
     ) -> str:
@@ -902,16 +1021,25 @@ Generate the comprehensive report now:"""
         # Format FRED data
         fred_summary = self._format_fred_data(fred_data)
 
+        # Format stock data for major carriers
+        stock_summary = self._format_newsletter_stock_summary(stock_data)
+
+        # Format SEC filings
+        sec_summary = self._format_newsletter_sec_summary(sec_filings)
+
         # Format previous newsletter context
         previous_context = ""
         if previous_newsletter:
             prev_start = previous_newsletter.get('week_start', 'Unknown')
             prev_end = previous_newsletter.get('week_end', 'Unknown')
+            prev_predictions = previous_newsletter.get('sections', {}).get('week_ahead', '')
             previous_context = f"""
 **Previous Week's Newsletter** ({prev_start} to {prev_end}):
 - Use this for historical context and ongoing story tracking
 - Reference any predictions made last week and verify against this week's data
 """
+            if prev_predictions:
+                previous_context += f"\nLast week's predictions to verify:\n{prev_predictions[:500]}\n"
 
         # Build sections list based on configuration
         sections_text = []
@@ -966,6 +1094,10 @@ Generate the comprehensive report now:"""
 
 {fred_summary}
 
+{stock_summary}
+
+{sec_summary}
+
 {previous_context}
 
 **Instructions**:
@@ -976,7 +1108,9 @@ Generate a professional newsletter in Markdown format with the following section
 **Style Guidelines**:
 - Engaging, newsletter-style writing (not overly formal)
 - Clear, scannable structure with headers
-- Use specific data points and numbers
+- Use specific data points and numbers (stock prices, TSA throughput, credit spreads)
+- Include stock performance in "By The Numbers" section
+- Mention notable SEC filings if material
 - Include context for non-expert readers
 - Balance detail with readability
 - Use markdown formatting effectively
@@ -1147,6 +1281,52 @@ Generate the newsletter now:"""
             formatted += f"- **{filing_type}** (Filed: {filing_date})\n"
             if description:
                 formatted += f"  {description}\n"
+
+        return formatted
+
+    def _format_newsletter_stock_summary(self, stock_data: Optional[Dict]) -> str:
+        """Format major carrier stock performance for newsletter"""
+        if not stock_data:
+            return "**Sector Stock Performance**: Not available this week."
+
+        formatted = "**Sector Stock Performance** (Major Carriers):\n\n"
+
+        # Handle both single stock dict and multi-carrier dict
+        if 'ticker' in stock_data:
+            # Single stock
+            ticker = stock_data.get('ticker', 'N/A')
+            price = stock_data.get('current_price', 0)
+            change = stock_data.get('day_change_percent', 0)
+            change_str = f"{change:+.1f}%" if change else "N/A"
+            formatted += f"- {ticker}: ${price:.2f} ({change_str})\n"
+        else:
+            # Multi-carrier dict
+            for carrier, data in stock_data.items():
+                if data and isinstance(data, dict):
+                    ticker = data.get('ticker', carrier[:3].upper())
+                    price = data.get('current_price', 0)
+                    change = data.get('day_change_percent', 0)
+                    change_str = f"{change:+.1f}%" if change else "N/A"
+                    formatted += f"- {ticker}: ${price:.2f} ({change_str})\n"
+
+        return formatted
+
+    def _format_newsletter_sec_summary(self, sec_filings: Optional[List[Dict]]) -> str:
+        """Format notable SEC filings for newsletter"""
+        if not sec_filings:
+            return "**Notable SEC Filings**: None this week."
+
+        formatted = "**Notable SEC Filings** (Past Week):\n\n"
+        for filing in sec_filings[:5]:
+            company = filing.get('company_name', 'Unknown')
+            filing_type = filing.get('filing_type', 'N/A')
+            filing_date = filing.get('filing_date', 'N/A')
+            description = filing.get('description', '')
+
+            formatted += f"- **{company}**: {filing_type} ({filing_date})"
+            if description:
+                formatted += f" - {description}"
+            formatted += "\n"
 
         return formatted
 
@@ -1378,10 +1558,40 @@ Note: Using estimated spreads (FRED API temporarily unavailable)
             # Get market context
             context = self._get_weekly_market_context()
 
+            # Format quantitative sections
+            tsa_text = ""
+            if context.get('tsa_summary'):
+                tsa = context['tsa_summary']
+                tsa_text = f"""TSA PASSENGER DATA (Last 7 Days):
+- 7-Day Total: {tsa['total_passengers_7d']:,} passengers
+- vs 2019 Baseline: {tsa['avg_vs_2019']}%
+- Trend: {tsa['trend']}"""
+
+            fred_text = ""
+            if context.get('fred_summary'):
+                fred = context['fred_summary']
+                fred_text = f"""CREDIT MARKET CONDITIONS:
+- BBB Credit Spread: {fred['spread_bps']} bps
+- Risk Level: {fred['risk_level']}
+- Condition: {fred['condition']}"""
+
+            stock_text = ""
+            if context.get('stock_summary'):
+                stock = context['stock_summary']
+                stock_text = f"""SECTOR STOCK PERFORMANCE (5 Days):
+- Average Return: {stock['avg_sector_return']:+.1f}%
+- Positive Movers: {stock['positive_count']}/{stock['total_carriers']} carriers"""
+
             # Build Gemini prompt
             prompt = f"""Based on current aviation industry data, identify 3-5 key investment themes.
 
 CURRENT MARKET CONTEXT (Last 7 Days):
+
+{tsa_text}
+
+{fred_text}
+
+{stock_text}
 
 MAJOR HEADLINES:
 {chr(10).join(context['headlines']) if context['headlines'] else '• No major headlines this week'}
@@ -1393,10 +1603,11 @@ FINANCIAL RISKS:
 {chr(10).join(f"• {r}" for r in context['financial_risks']) if context['financial_risks'] else '• No significant financial risks'}
 
 Generate 3-5 investment themes (one sentence each) that:
-1. Reflect current market dynamics and trends
-2. Highlight opportunities or positioning strategies
-3. Use professional, analytical language suitable for institutional investors
-4. Focus on actionable insights
+1. Incorporate the quantitative data (passenger trends, credit conditions, stock performance)
+2. Reflect current market dynamics and trends
+3. Highlight opportunities or positioning strategies
+4. Use professional, analytical language suitable for institutional investors
+5. Focus on actionable insights
 
 Format your response as a simple list without numbers:
 - [Theme 1]
@@ -1455,10 +1666,26 @@ Investment Themes:"""
             themes = self.generate_investment_themes(use_cache=True)
             themes_text = '\n'.join(f"• {t}" for t in themes) if themes else "• No specific themes identified"
 
+            # Build quantitative summary
+            quant_summary = ""
+            if context.get('tsa_summary') or context.get('fred_summary') or context.get('stock_summary'):
+                quant_summary = "QUANTITATIVE INDICATORS:\n"
+                if context.get('tsa_summary'):
+                    tsa = context['tsa_summary']
+                    quant_summary += f"- Passenger Traffic vs 2019: {tsa['avg_vs_2019']}%\n"
+                if context.get('fred_summary'):
+                    fred = context['fred_summary']
+                    quant_summary += f"- Credit Spreads: {fred['spread_bps']}bps ({fred['risk_level']})\n"
+                if context.get('stock_summary'):
+                    stock = context['stock_summary']
+                    quant_summary += f"- Sector Performance (5D): {stock['avg_sector_return']:+.1f}%\n"
+
             # Build Gemini prompt
             prompt = f"""Generate strategic investment recommendation for the aviation sector.
 
 CONTEXT:
+
+{quant_summary}
 
 INVESTMENT THEMES:
 {themes_text}
@@ -1476,6 +1703,7 @@ Provide a 2-3 sentence strategic recommendation addressing:
 3. Key variables or metrics to monitor going forward
 
 Use professional language suitable for institutional investors. Be specific and actionable.
+Reference the quantitative data where relevant.
 
 Strategic Recommendation:"""
 
@@ -1521,10 +1749,27 @@ Strategic Recommendation:"""
             # Get market context
             context = self._get_weekly_market_context()
 
+            # Build market indicators section
+            indicators_text = ""
+            if context.get('tsa_summary') or context.get('fred_summary') or context.get('stock_summary'):
+                indicators_text = "MARKET INDICATORS:\n"
+                if context.get('tsa_summary'):
+                    tsa = context['tsa_summary']
+                    indicators_text += f"- Passenger demand at {tsa['avg_vs_2019']}% of 2019 levels, trend: {tsa['trend']}\n"
+                if context.get('fred_summary'):
+                    fred = context['fred_summary']
+                    indicators_text += f"- Credit spreads at {fred['spread_bps']}bps indicating {fred['condition'].lower()}\n"
+                if context.get('stock_summary'):
+                    stock = context['stock_summary']
+                    sentiment = "positive" if stock['avg_sector_return'] > 0 else "negative" if stock['avg_sector_return'] < 0 else "neutral"
+                    indicators_text += f"- Sector sentiment: {sentiment} ({stock['avg_sector_return']:+.1f}% average return)\n"
+
             # Build Gemini prompt
             prompt = f"""Generate a professional 2-3 sentence executive summary for aviation industry weekly outlook.
 
 CURRENT CONTEXT (Last 7 Days):
+
+{indicators_text}
 
 MAJOR HEADLINES:
 {chr(10).join(context['headlines'][:5]) if context['headlines'] else '• Market activity moderate this week'}
@@ -1537,6 +1782,7 @@ Create a concise, analytical summary (2-3 sentences) highlighting:
 1. Overall sector health and momentum (resilient/strong/challenged/mixed)
 2. Key trends or developments from the headlines
 3. Notable risk factors or opportunities
+4. Reference specific metrics where available (passenger demand, spreads, stock performance)
 
 Use professional language suitable for institutional investors. Focus on synthesis rather than listing.
 
@@ -1669,7 +1915,7 @@ Catalysts:"""
         Aggregate current market metrics and news for weekly outlook AI context
 
         Returns:
-            Dictionary with market metrics, news headlines, and risk factors
+            Dictionary with market metrics, news headlines, risk factors, and quantitative data
         """
         try:
             # Get recent news articles (last 7 days) using Eastern Time
@@ -1704,11 +1950,64 @@ Catalysts:"""
             op_risks = [r.get('impact_statement', r.get('title', '')) for r in operational_risks]
             fin_risks = [r.get('impact_statement', r.get('title', '')) for r in financial_risks]
 
+            # NEW: Get TSA summary
+            tsa_summary = None
+            try:
+                tsa_records = self.db.get_tsa_data(start_date=start_date, limit=7)
+                if tsa_records:
+                    total_passengers = sum(r.get('current_throughput', r.get('current_year', 0)) for r in tsa_records)
+                    avg_vs_2019 = sum(r.get('compared_to_2019', 95) for r in tsa_records if r.get('compared_to_2019')) / max(1, len([r for r in tsa_records if r.get('compared_to_2019')]))
+                    trend = tsa_records[0].get('trend_analysis', 'stable') if tsa_records else 'stable'
+                    tsa_summary = {
+                        'total_passengers_7d': total_passengers,
+                        'avg_vs_2019': round(avg_vs_2019, 1),
+                        'trend': trend
+                    }
+            except Exception as e:
+                logger.warning(f"⚠️ Could not fetch TSA data for market context: {e}")
+
+            # NEW: Get FRED credit spreads
+            fred_summary = None
+            try:
+                fred_records = self.db.get_fred_data(limit=1)
+                if fred_records:
+                    data = fred_records[0]
+                    fred_summary = {
+                        'spread_bps': data.get('credit_spread_bps', 150),
+                        'risk_level': data.get('risk_level', 'moderate'),
+                        'condition': data.get('spread_description', 'Normal conditions')
+                    }
+            except Exception as e:
+                logger.warning(f"⚠️ Could not fetch FRED data for market context: {e}")
+
+            # NEW: Get sector stock performance
+            stock_summary = None
+            if self.stock_service:
+                try:
+                    carriers = ['United Airlines', 'Delta Air Lines', 'American Airlines', 'Southwest Airlines']
+                    returns = []
+                    for carrier in carriers:
+                        stock = self.stock_service.get_stock_data(carrier, period='5d')
+                        if stock and stock.get('day_change_percent') is not None:
+                            returns.append(stock.get('day_change_percent', 0))
+                    if returns:
+                        avg_return = sum(returns) / len(returns)
+                        stock_summary = {
+                            'avg_sector_return': round(avg_return, 2),
+                            'positive_count': sum(1 for r in returns if r > 0),
+                            'total_carriers': len(returns)
+                        }
+                except Exception as e:
+                    logger.warning(f"⚠️ Could not fetch stock data for market context: {e}")
+
             return {
                 'headlines': headlines,
                 'operational_risks': op_risks,
                 'financial_risks': fin_risks,
-                'article_count': len(recent_news)
+                'article_count': len(recent_news),
+                'tsa_summary': tsa_summary,
+                'fred_summary': fred_summary,
+                'stock_summary': stock_summary
             }
 
         except Exception as e:
@@ -1717,7 +2016,10 @@ Catalysts:"""
                 'headlines': [],
                 'operational_risks': [],
                 'financial_risks': [],
-                'article_count': 0
+                'article_count': 0,
+                'tsa_summary': None,
+                'fred_summary': None,
+                'stock_summary': None
             }
 
     def _parse_bullet_list(self, text: str) -> List[str]:
