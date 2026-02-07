@@ -41,6 +41,76 @@ class InsightsService:
         self.fred_service = fred_service
         logger.info("✅ Insights service initialized")
 
+    # =================================================================
+    # CACHED DATA RETRIEVAL (Pre-loaded data from daily ingestion)
+    # =================================================================
+
+    def _get_fred_data_cached(self) -> Optional[Dict]:
+        """
+        Get FRED credit spread data - prefer cached from daily ingestion, fallback to live API
+
+        Returns:
+            FRED credit spread benchmark data or None
+        """
+        from datetime import timezone
+
+        # Try Firestore cache first (from daily financial ingestion)
+        try:
+            cached = self.db.get_latest_financial_snapshot('fred_spreads')
+            if cached:
+                stored_at = cached.get('stored_at')
+                if stored_at:
+                    # Check if less than 24 hours old
+                    if hasattr(stored_at, 'replace'):
+                        stored_at = stored_at.replace(tzinfo=timezone.utc)
+                    age_seconds = (datetime.now(timezone.utc) - stored_at).total_seconds()
+                    if age_seconds < 86400:  # 24 hours
+                        logger.info("📊 Using cached FRED data from daily ingestion")
+                        return cached
+        except Exception as e:
+            logger.warning(f"⚠️ Error checking cached FRED data: {e}")
+
+        # Fallback to live API
+        if self.fred_service:
+            logger.info("📊 Fetching live FRED data (cache miss or stale)")
+            return self.fred_service.get_credit_spread_benchmarks()
+
+        return None
+
+    def _get_carrier_financials_cached(self, airline: str) -> Optional[Dict]:
+        """
+        Get carrier financial data - prefer cached from daily ingestion, fallback to live API
+
+        Args:
+            airline: Airline name (e.g., 'United Airlines')
+
+        Returns:
+            Balance sheet and financial data or None
+        """
+        from datetime import timezone
+
+        # Try Firestore cache first (from daily financial ingestion)
+        try:
+            cached = self.db.get_latest_carrier_financial_snapshot(airline)
+            if cached:
+                stored_at = cached.get('stored_at')
+                if stored_at:
+                    if hasattr(stored_at, 'replace'):
+                        stored_at = stored_at.replace(tzinfo=timezone.utc)
+                    age_seconds = (datetime.now(timezone.utc) - stored_at).total_seconds()
+                    if age_seconds < 86400:  # 24 hours
+                        logger.info(f"💰 Using cached financials for {airline} from daily ingestion")
+                        return cached
+        except Exception as e:
+            logger.warning(f"⚠️ Error checking cached financials for {airline}: {e}")
+
+        # Fallback to live API
+        if self.financial_service:
+            logger.info(f"💰 Fetching live financials for {airline} (cache miss or stale)")
+            return self.financial_service.get_balance_sheet_data(airline)
+
+        return None
+
     def generate_airline_report(
         self,
         subject: str,
@@ -145,19 +215,21 @@ class InsightsService:
                 else:
                     logger.warning(f"⚠️ Could not match airline name '{subject}' to carrier code")
 
-            # Get balance sheet data from Yahoo Finance for credit analysis
+            # Get balance sheet data - prefer cached from daily ingestion
             balance_sheet_data = None
-            if self.financial_service and report_type in ['credit_analysis', 'comprehensive']:
-                balance_sheet_data = self.financial_service.get_balance_sheet_data(subject)
+            if report_type in ['credit_analysis', 'comprehensive']:
+                # Try cached data first (from daily financial ingestion)
+                balance_sheet_data = self._get_carrier_financials_cached(subject)
                 if balance_sheet_data:
                     logger.info(f"✅ Retrieved balance sheet data for {subject}")
                 else:
                     logger.warning(f"⚠️ Could not fetch balance sheet data for '{subject}'")
 
-            # Get credit spread benchmarks (multi-tier) for credit analysis
+            # Get credit spread benchmarks - prefer cached from daily ingestion
             credit_benchmarks = None
-            if self.fred_service and report_type in ['credit_analysis', 'comprehensive']:
-                credit_benchmarks = self.fred_service.get_credit_spread_benchmarks()
+            if report_type in ['credit_analysis', 'comprehensive']:
+                # Try cached data first (from daily financial ingestion)
+                credit_benchmarks = self._get_fred_data_cached()
                 if credit_benchmarks and credit_benchmarks.get('success'):
                     logger.info(f"✅ Retrieved credit spread benchmarks")
                 else:

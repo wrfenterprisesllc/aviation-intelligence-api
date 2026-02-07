@@ -2290,6 +2290,227 @@ def get_credit_rating(airline_name: str):
         }), 500
 
 
+# ============================================================================
+# AUTOMATED DATA INGESTION ENDPOINTS - Daily Pre-loading
+# ============================================================================
+
+@app.route('/api/ingest/financial-data', methods=['POST'])
+def ingest_financial_data():
+    """
+    Daily ingestion of all financial data sources
+    Designed to be triggered by Cloud Scheduler at 7:00 AM ET
+
+    This endpoint pre-loads:
+    1. FRED credit spreads (all rating tiers: AA, A, BBB, BB)
+    2. Carrier financials for all tracked airlines
+    3. TSA passenger data
+    4. BTS operational metrics
+    """
+    start_time = datetime.now()
+    from datetime import timezone
+
+    results = {
+        'success': True,
+        'fred_data': {},
+        'carrier_financials': {},
+        'tsa_data': {},
+        'bts_data': {},
+        'timestamp': datetime.now(timezone.utc).isoformat(),
+        'errors': []
+    }
+
+    # 1. Fetch and store FRED credit spreads (all tiers)
+    try:
+        if fred_service:
+            logger.info("📊 Ingesting FRED credit spreads...")
+            fred_data = fred_service.get_credit_spread_benchmarks()
+            if fred_data and fred_data.get('success'):
+                db_service.store_financial_snapshot('fred_spreads', fred_data)
+                results['fred_data'] = {
+                    'status': 'success',
+                    'data_date': fred_data.get('data_date'),
+                    'spreads_fetched': len(fred_data.get('spreads', {}))
+                }
+                logger.info(f"✅ FRED data stored: {fred_data.get('data_date')}")
+            else:
+                results['fred_data'] = {'status': 'no_data'}
+                results['errors'].append('FRED: No data returned')
+        else:
+            results['fred_data'] = {'status': 'service_unavailable'}
+            results['errors'].append('FRED: Service not available')
+    except Exception as e:
+        results['fred_data'] = {'status': 'error', 'message': str(e)}
+        results['errors'].append(f'FRED: {str(e)}')
+        logger.error(f"❌ FRED ingestion error: {e}")
+
+    # 2. Fetch and store carrier financials for all tracked airlines
+    airlines = [
+        'United Airlines', 'Delta Air Lines', 'American Airlines',
+        'Southwest Airlines', 'Alaska Airlines', 'JetBlue Airways'
+    ]
+
+    if financial_service:
+        logger.info("💰 Ingesting carrier financials...")
+        for airline in airlines:
+            try:
+                balance_sheet = financial_service.get_balance_sheet_data(airline)
+                if balance_sheet:
+                    # Add credit rating estimate
+                    debt_to_ebitda = balance_sheet.get('debt_to_ebitda')
+                    interest_coverage = balance_sheet.get('interest_coverage')
+                    if debt_to_ebitda and interest_coverage:
+                        rating = financial_service.estimate_credit_rating(debt_to_ebitda, interest_coverage)
+                        balance_sheet['credit_rating_estimate'] = rating
+
+                    db_service.store_carrier_financial_snapshot(airline, balance_sheet)
+                    results['carrier_financials'][airline] = 'success'
+                    logger.info(f"✅ {airline} financials stored")
+                else:
+                    results['carrier_financials'][airline] = 'no_data'
+            except Exception as e:
+                results['carrier_financials'][airline] = f'error: {str(e)}'
+                results['errors'].append(f'{airline}: {str(e)}')
+                logger.error(f"❌ {airline} ingestion error: {e}")
+    else:
+        for airline in airlines:
+            results['carrier_financials'][airline] = 'service_unavailable'
+        results['errors'].append('Financial service not available')
+
+    # 3. Fetch and store TSA passenger data
+    try:
+        if tsa_service:
+            logger.info("🛂 Ingesting TSA passenger data...")
+            tsa_data = tsa_service.get_real_tsa_data()
+            if tsa_data and tsa_data.get('success'):
+                db_service.store_financial_snapshot('tsa_passengers', tsa_data['data'])
+                results['tsa_data'] = {
+                    'status': 'success',
+                    'date': tsa_data['data'].get('date'),
+                    'throughput': tsa_data['data'].get('current_throughput')
+                }
+                logger.info(f"✅ TSA data stored: {tsa_data['data'].get('date')}")
+            else:
+                results['tsa_data'] = {'status': 'no_data'}
+        else:
+            results['tsa_data'] = {'status': 'service_unavailable'}
+    except Exception as e:
+        results['tsa_data'] = {'status': 'error', 'message': str(e)}
+        results['errors'].append(f'TSA: {str(e)}')
+        logger.error(f"❌ TSA ingestion error: {e}")
+
+    # 4. Fetch and store BTS operational data for carriers
+    if bts_service:
+        logger.info("📈 Ingesting BTS operational metrics...")
+        results['bts_data'] = {}
+        for airline in airlines:
+            try:
+                # Get carrier code from airline name
+                carrier_code = None
+                for code, info in bts_service.CARRIER_CODES.items():
+                    if info['name'] == airline:
+                        carrier_code = code
+                        break
+
+                if carrier_code:
+                    bts_data = bts_service.get_carrier_financials(carrier_code)
+                    if bts_data:
+                        db_service.store_financial_snapshot(f'bts_{airline.replace(" ", "_")}', bts_data)
+                        results['bts_data'][airline] = 'success'
+                        logger.info(f"✅ BTS data stored for {airline}")
+                    else:
+                        results['bts_data'][airline] = 'no_data'
+                else:
+                    results['bts_data'][airline] = 'carrier_not_found'
+            except Exception as e:
+                results['bts_data'][airline] = f'error: {str(e)}'
+                logger.error(f"❌ BTS ingestion error for {airline}: {e}")
+    else:
+        results['bts_data'] = {'status': 'service_unavailable'}
+
+    # Calculate response time and finalize
+    response_time = (datetime.now() - start_time).total_seconds() * 1000
+    results['response_time_ms'] = round(response_time, 1)
+    results['success'] = len(results['errors']) == 0
+
+    logger.info(f"📊 Financial data ingestion complete in {response_time:.1f}ms - {len(results['errors'])} errors")
+
+    return jsonify(results)
+
+
+@app.route('/api/ingest/status', methods=['GET'])
+def get_ingestion_status():
+    """
+    Check the status of pre-loaded financial data
+    Returns freshness of each data type
+    """
+    start_time = datetime.now()
+    from datetime import timezone
+
+    status = {
+        'success': True,
+        'data_freshness': {},
+        'timestamp': datetime.now(timezone.utc).isoformat()
+    }
+
+    # Check FRED data freshness
+    try:
+        fred_snapshot = db_service.get_latest_financial_snapshot('fred_spreads')
+        if fred_snapshot:
+            stored_at = fred_snapshot.get('stored_at')
+            if stored_at:
+                age_hours = (datetime.now(timezone.utc) - stored_at.replace(tzinfo=timezone.utc)).total_seconds() / 3600
+                status['data_freshness']['fred_spreads'] = {
+                    'last_updated': stored_at.isoformat() if hasattr(stored_at, 'isoformat') else str(stored_at),
+                    'age_hours': round(age_hours, 1),
+                    'is_fresh': age_hours < 24
+                }
+        else:
+            status['data_freshness']['fred_spreads'] = {'status': 'no_data'}
+    except Exception as e:
+        status['data_freshness']['fred_spreads'] = {'status': 'error', 'message': str(e)}
+
+    # Check TSA data freshness
+    try:
+        tsa_snapshot = db_service.get_latest_financial_snapshot('tsa_passengers')
+        if tsa_snapshot:
+            stored_at = tsa_snapshot.get('stored_at')
+            if stored_at:
+                age_hours = (datetime.now(timezone.utc) - stored_at.replace(tzinfo=timezone.utc)).total_seconds() / 3600
+                status['data_freshness']['tsa_passengers'] = {
+                    'last_updated': stored_at.isoformat() if hasattr(stored_at, 'isoformat') else str(stored_at),
+                    'age_hours': round(age_hours, 1),
+                    'is_fresh': age_hours < 24
+                }
+        else:
+            status['data_freshness']['tsa_passengers'] = {'status': 'no_data'}
+    except Exception as e:
+        status['data_freshness']['tsa_passengers'] = {'status': 'error', 'message': str(e)}
+
+    # Check carrier financial snapshots
+    airlines = ['United Airlines', 'Delta Air Lines', 'American Airlines']
+    for airline in airlines:
+        try:
+            carrier_snapshot = db_service.get_latest_carrier_financial_snapshot(airline)
+            if carrier_snapshot:
+                stored_at = carrier_snapshot.get('stored_at')
+                if stored_at:
+                    age_hours = (datetime.now(timezone.utc) - stored_at.replace(tzinfo=timezone.utc)).total_seconds() / 3600
+                    status['data_freshness'][airline] = {
+                        'last_updated': stored_at.isoformat() if hasattr(stored_at, 'isoformat') else str(stored_at),
+                        'age_hours': round(age_hours, 1),
+                        'is_fresh': age_hours < 24
+                    }
+            else:
+                status['data_freshness'][airline] = {'status': 'no_data'}
+        except Exception as e:
+            status['data_freshness'][airline] = {'status': 'error', 'message': str(e)}
+
+    response_time = (datetime.now() - start_time).total_seconds() * 1000
+    status['response_time_ms'] = round(response_time, 1)
+
+    return jsonify(status)
+
+
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 8080))
     app.run(host='0.0.0.0', port=port, debug=False)

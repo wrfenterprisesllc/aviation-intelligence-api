@@ -1041,6 +1041,140 @@ class DatabaseService:
             self.logger.error(f"Error fetching all carrier financials: {e}")
             return []
 
+    # ========== FINANCIAL SNAPSHOTS (Daily Pre-loaded Data) ==========
+
+    def store_financial_snapshot(self, data_type: str, data: Dict[str, Any]) -> str:
+        """
+        Store daily financial data snapshot for pre-loading
+
+        Args:
+            data_type: Type of data (e.g., 'fred_spreads', 'tsa_passengers', 'bts_United_Airlines')
+            data: Dictionary containing the financial data
+
+        Returns:
+            Document ID of the stored snapshot
+        """
+        try:
+            from datetime import timezone
+            doc_id = f"{data_type}_{datetime.now().strftime('%Y-%m-%d')}"
+            doc_ref = self.db.collection('financial_snapshots').document(doc_id)
+
+            snapshot_data = {
+                **data,
+                'data_type': data_type,
+                'stored_at': datetime.now(timezone.utc)
+            }
+
+            doc_ref.set(snapshot_data)
+            self.logger.info(f"Stored financial snapshot: {doc_id}")
+            return doc_id
+
+        except Exception as e:
+            self.logger.error(f"Error storing financial snapshot: {e}")
+            raise
+
+    def get_latest_financial_snapshot(self, data_type: str) -> Optional[Dict[str, Any]]:
+        """
+        Get most recent financial data snapshot
+
+        Args:
+            data_type: Type of data to retrieve (e.g., 'fred_spreads', 'tsa_passengers')
+
+        Returns:
+            Financial snapshot dictionary or None if not found
+        """
+        try:
+            query = (self.db.collection('financial_snapshots')
+                    .where(filter=FieldFilter('data_type', '==', data_type))
+                    .order_by('stored_at', direction=firestore.Query.DESCENDING)
+                    .limit(1))
+
+            docs = list(query.stream())
+
+            if docs:
+                data = docs[0].to_dict()
+                data['id'] = docs[0].id
+
+                # Convert stored_at timestamp if present
+                if 'stored_at' in data and hasattr(data['stored_at'], 'timestamp'):
+                    data['stored_at'] = data['stored_at'].replace(tzinfo=None)
+
+                self.logger.info(f"Retrieved financial snapshot: {data_type}")
+                return data
+            else:
+                self.logger.info(f"No financial snapshot found for: {data_type}")
+                return None
+
+        except Exception as e:
+            self.logger.error(f"Error fetching financial snapshot: {e}")
+            return None
+
+    def store_carrier_financial_snapshot(self, airline: str, data: Dict[str, Any]) -> str:
+        """
+        Store carrier financial data snapshot with date key
+
+        Args:
+            airline: Airline name (e.g., 'United Airlines')
+            data: Dictionary containing carrier financial data
+
+        Returns:
+            Document ID of the stored snapshot
+        """
+        try:
+            from datetime import timezone
+            doc_id = f"{airline.replace(' ', '_')}_{datetime.now().strftime('%Y-%m-%d')}"
+            doc_ref = self.db.collection('carrier_financial_snapshots').document(doc_id)
+
+            snapshot_data = {
+                **data,
+                'airline': airline,
+                'stored_at': datetime.now(timezone.utc)
+            }
+
+            doc_ref.set(snapshot_data)
+            self.logger.info(f"Stored carrier financial snapshot: {doc_id}")
+            return doc_id
+
+        except Exception as e:
+            self.logger.error(f"Error storing carrier financial snapshot: {e}")
+            raise
+
+    def get_latest_carrier_financial_snapshot(self, airline: str) -> Optional[Dict[str, Any]]:
+        """
+        Get most recent carrier financial data snapshot
+
+        Args:
+            airline: Airline name to retrieve (e.g., 'United Airlines')
+
+        Returns:
+            Carrier financial snapshot dictionary or None if not found
+        """
+        try:
+            query = (self.db.collection('carrier_financial_snapshots')
+                    .where(filter=FieldFilter('airline', '==', airline))
+                    .order_by('stored_at', direction=firestore.Query.DESCENDING)
+                    .limit(1))
+
+            docs = list(query.stream())
+
+            if docs:
+                data = docs[0].to_dict()
+                data['id'] = docs[0].id
+
+                # Convert stored_at timestamp if present
+                if 'stored_at' in data and hasattr(data['stored_at'], 'timestamp'):
+                    data['stored_at'] = data['stored_at'].replace(tzinfo=None)
+
+                self.logger.info(f"Retrieved carrier financial snapshot: {airline}")
+                return data
+            else:
+                self.logger.info(f"No carrier financial snapshot found for: {airline}")
+                return None
+
+        except Exception as e:
+            self.logger.error(f"Error fetching carrier financial snapshot: {e}")
+            return None
+
     # ========== HEALTH CHECK ==========
 
     def health_check(self) -> Dict[str, Any]:
