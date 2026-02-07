@@ -65,20 +65,23 @@ try:
     from app.services.stock_data_service import StockDataService
     from app.services.sec_filings_service import SECFilingsService
     from app.services.bts_service import BTSService
+    from app.services.financial_data_service import FinancialDataService
 
     gemini_service = GeminiService()
     stock_service = StockDataService()
     sec_service = SECFilingsService()
     bts_service = BTSService(db_service=db_service)
+    financial_service = FinancialDataService(bts_service=bts_service)
 
     insights_service = InsightsService(
         gemini_service=gemini_service,
         database_service=db_service,
         stock_service=stock_service,
         sec_service=sec_service,
-        bts_service=bts_service
+        bts_service=bts_service,
+        financial_service=financial_service
     )
-    logger.info("✅ Gemini, Stock, SEC, BTS, and Insights services initialized")
+    logger.info("✅ Gemini, Stock, SEC, BTS, Financial, and Insights services initialized")
 except Exception as e:
     logger.warning(f"⚠️ Gemini/Insights service initialization failed: {e}")
     gemini_service = None
@@ -86,6 +89,7 @@ except Exception as e:
     stock_service = None
     sec_service = None
     bts_service = None
+    financial_service = None
 
 @app.before_request
 def before_request():

@@ -19,7 +19,7 @@ EASTERN_TZ = pytz.timezone('US/Eastern')
 class InsightsService:
     """Service for generating AI-powered insights, reports, and newsletters"""
 
-    def __init__(self, gemini_service, database_service, stock_service=None, sec_service=None, bts_service=None):
+    def __init__(self, gemini_service, database_service, stock_service=None, sec_service=None, bts_service=None, financial_service=None):
         """
         Initialize insights service
 
@@ -29,12 +29,14 @@ class InsightsService:
             stock_service: StockDataService instance for stock data (optional)
             sec_service: SECFilingsService instance for SEC filings (optional)
             bts_service: BTSService instance for carrier financials (optional)
+            financial_service: FinancialDataService for balance sheet data (optional)
         """
         self.gemini = gemini_service
         self.db = database_service
         self.stock_service = stock_service
         self.sec_service = sec_service
         self.bts_service = bts_service
+        self.financial_service = financial_service
         logger.info("✅ Insights service initialized")
 
     def generate_airline_report(
@@ -141,6 +143,15 @@ class InsightsService:
                 else:
                     logger.warning(f"⚠️ Could not match airline name '{subject}' to carrier code")
 
+            # Get balance sheet data from Yahoo Finance for credit analysis
+            balance_sheet_data = None
+            if self.financial_service and report_type in ['credit_analysis', 'comprehensive']:
+                balance_sheet_data = self.financial_service.get_balance_sheet_data(subject)
+                if balance_sheet_data:
+                    logger.info(f"✅ Retrieved balance sheet data for {subject}")
+                else:
+                    logger.warning(f"⚠️ Could not fetch balance sheet data for '{subject}'")
+
             # Log data availability for debugging
             if not news_articles:
                 logger.warning(f"⚠️ No news articles found for {subject} from {start_date.date()} to {end_date.date()}")
@@ -158,7 +169,8 @@ class InsightsService:
                        f"FRED: {'Yes' if fred_data else 'No'}, "
                        f"Stock: {'Yes' if stock_data else 'No'}, "
                        f"SEC: {'Yes' if sec_filings else 'No'}, "
-                       f"BTS: {'Yes' if carrier_financials else 'No'}")
+                       f"BTS: {'Yes' if carrier_financials else 'No'}, "
+                       f"BalanceSheet: {'Yes' if balance_sheet_data else 'No'}")
 
             # Build prompt based on report type
             if report_type == 'credit_analysis':
@@ -170,6 +182,7 @@ class InsightsService:
                     stock_data=stock_data,
                     sec_filings=sec_filings,
                     carrier_financials=carrier_financials,
+                    balance_sheet_data=balance_sheet_data,
                     period_start=start_date,
                     period_end=end_date
                 )
@@ -242,6 +255,7 @@ class InsightsService:
                     'stock_included': stock_data is not None,
                     'sec_filings_included': sec_filings is not None,
                     'bts_included': carrier_financials is not None,
+                    'balance_sheet_included': balance_sheet_data is not None,
                     'model': 'gemini-2.0-flash-exp'
                 },
                 'cached_until': cached_until
@@ -499,8 +513,9 @@ Generate the report now:"""
         stock_data: Optional[Dict],
         sec_filings: Optional[Dict],
         carrier_financials: Optional[Dict],
-        period_start: datetime,
-        period_end: datetime
+        balance_sheet_data: Optional[Dict] = None,
+        period_start: datetime = None,
+        period_end: datetime = None
     ) -> str:
         """Build specialized credit analysis prompt from lender/bondholder perspective"""
 
@@ -511,12 +526,15 @@ Generate the report now:"""
         stock_summary = self._format_stock_data(stock_data)
         sec_summary = self._format_sec_filings(sec_filings)
         carrier_summary = self._format_carrier_financials(carrier_financials)
+        balance_sheet_summary = self._format_balance_sheet_data(balance_sheet_data)
 
         prompt = f"""You are a senior airline credit analyst. Generate a comprehensive credit analysis report for {subject} covering {period_start.strftime('%B %d, %Y')} to {period_end.strftime('%B %d, %Y')}.
 
 **Perspective**: Analyze from a lender/bondholder perspective, focusing on creditworthiness and financial risk.
 
 **Available Data**:
+
+{balance_sheet_summary}
 
 {carrier_summary}
 
@@ -1070,6 +1088,52 @@ Period Ending: {carrier_financials.get('period_end_date', 'Unknown')}
 - RASM-CASM Spread: {(carrier_financials.get('rasm_cents', 0) - carrier_financials.get('casm_cents', 0)):.2f}¢
 
 Source: DOT Bureau of Transportation Statistics Form 41
+"""
+        return formatted
+
+    def _format_balance_sheet_data(self, balance_sheet_data: Optional[Dict]) -> str:
+        """Format Yahoo Finance balance sheet data for prompt inclusion"""
+        if not balance_sheet_data:
+            return "**Balance Sheet & Credit Metrics**: Not available."
+
+        # Format values
+        total_debt_b = balance_sheet_data.get('total_debt', 0) / 1e9
+        net_debt_b = balance_sheet_data.get('net_debt', 0) / 1e9
+        cash_b = balance_sheet_data.get('cash_and_equivalents', 0) / 1e9
+        equity_b = balance_sheet_data.get('stockholders_equity', 0) / 1e9
+        ebitda_b = balance_sheet_data.get('ebitda', 0) / 1e9
+        ebit_b = balance_sheet_data.get('ebit', 0) / 1e9
+        fcf_b = balance_sheet_data.get('free_cash_flow', 0) / 1e9
+        ocf_b = balance_sheet_data.get('operating_cash_flow', 0) / 1e9
+        int_exp_m = balance_sheet_data.get('interest_expense', 0) / 1e6
+        net_income_b = balance_sheet_data.get('net_income', 0) / 1e9
+        working_cap_b = balance_sheet_data.get('working_capital', 0) / 1e9
+
+        formatted = f"""**Balance Sheet & Credit Metrics** ({balance_sheet_data.get('ticker', 'N/A')} - {balance_sheet_data.get('period', 'Annual')}):
+
+**Debt & Capital Structure:**
+- Total Debt: ${total_debt_b:.2f}B
+- Net Debt: ${net_debt_b:.2f}B
+- Stockholders' Equity: ${equity_b:.2f}B
+- Working Capital: ${working_cap_b:.2f}B
+
+**Liquidity:**
+- Cash & Equivalents: ${cash_b:.2f}B
+
+**Profitability & Cash Flow:**
+- EBITDA: ${ebitda_b:.2f}B
+- EBIT: ${ebit_b:.2f}B
+- Net Income: ${net_income_b:.2f}B
+- Free Cash Flow: ${fcf_b:.2f}B
+- Operating Cash Flow: ${ocf_b:.2f}B
+
+**Key Credit Ratios:**
+- Debt-to-EBITDA: {balance_sheet_data.get('debt_to_ebitda', 'N/A')}x
+- Interest Coverage (EBIT/Interest): {balance_sheet_data.get('interest_coverage', 'N/A')}x
+- Debt-to-Equity: {balance_sheet_data.get('debt_to_equity', 'N/A')}x
+- Annual Interest Expense: ${int_exp_m:.0f}M
+
+Source: Yahoo Finance (Latest Annual/Quarterly Filing)
 """
         return formatted
 
