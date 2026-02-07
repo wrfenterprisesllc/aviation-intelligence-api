@@ -2136,6 +2136,55 @@ def get_carrier_report_context(carrier_code: str):
         }), 500
 
 
+@app.route('/api/balance-sheet/<airline_name>')
+def get_balance_sheet(airline_name: str):
+    """Get balance sheet data from Yahoo Finance for an airline"""
+    start_time = datetime.now()
+
+    try:
+        if not financial_service:
+            return jsonify({
+                'success': False,
+                'error': 'Financial service not initialized',
+                'timestamp': datetime.now().isoformat()
+            }), 503
+
+        # URL decode the airline name (spaces come as %20)
+        from urllib.parse import unquote
+        airline_name = unquote(airline_name)
+
+        balance_sheet = financial_service.get_balance_sheet_data(airline_name)
+
+        response_time = (datetime.now() - start_time).total_seconds() * 1000
+
+        if balance_sheet:
+            return jsonify({
+                'success': True,
+                'airline_name': airline_name,
+                'balance_sheet': balance_sheet,
+                'timestamp': datetime.now().isoformat(),
+                'response_time_ms': round(response_time, 1)
+            })
+        else:
+            return jsonify({
+                'success': False,
+                'error': f'Could not fetch balance sheet for {airline_name}',
+                'timestamp': datetime.now().isoformat(),
+                'response_time_ms': round(response_time, 1)
+            }), 404
+
+    except Exception as e:
+        logger.error(f"❌ Error in balance sheet endpoint: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+        return jsonify({
+            'success': False,
+            'error': 'Internal server error',
+            'message': str(e),
+            'timestamp': datetime.now().isoformat()
+        }), 500
+
+
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 8080))
     app.run(host='0.0.0.0', port=port, debug=False)
