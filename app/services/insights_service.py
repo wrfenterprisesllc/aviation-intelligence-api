@@ -235,6 +235,23 @@ class InsightsService:
                 else:
                     logger.warning(f"⚠️ Could not fetch credit spread benchmarks")
 
+            # Get defense contracts for this subject
+            defense_contracts = None
+            if report_type in ['airline', 'credit_analysis', 'comprehensive', 'leasing_recommendation']:
+                try:
+                    defense_contracts = self.db.get_defense_contracts(
+                        start_date=start_date,
+                        end_date=end_date,
+                        contractor=subject,  # Match by company name
+                        limit=15
+                    )
+                    if defense_contracts:
+                        logger.info(f"✅ Retrieved {len(defense_contracts)} defense contracts for {subject}")
+                    else:
+                        logger.debug(f"No defense contracts found for {subject}")
+                except Exception as e:
+                    logger.warning(f"⚠️ Could not fetch defense contracts: {e}")
+
             # Log data availability for debugging
             if not news_articles:
                 logger.warning(f"⚠️ No news articles found for {subject} from {start_date.date()} to {end_date.date()}")
@@ -254,7 +271,8 @@ class InsightsService:
                        f"SEC: {'Yes' if sec_filings else 'No'}, "
                        f"BTS: {'Yes' if carrier_financials else 'No'}, "
                        f"BalanceSheet: {'Yes' if balance_sheet_data else 'No'}, "
-                       f"CreditBenchmarks: {'Yes' if credit_benchmarks else 'No'}")
+                       f"CreditBenchmarks: {'Yes' if credit_benchmarks else 'No'}, "
+                       f"DefenseContracts: {len(defense_contracts) if defense_contracts else 0}")
 
             # Build prompt based on report type
             if report_type == 'credit_analysis':
@@ -268,6 +286,7 @@ class InsightsService:
                     carrier_financials=carrier_financials,
                     balance_sheet_data=balance_sheet_data,
                     credit_benchmarks=credit_benchmarks,
+                    defense_contracts=defense_contracts,
                     period_start=start_date,
                     period_end=end_date
                 )
@@ -281,6 +300,7 @@ class InsightsService:
                     sec_filings=sec_filings,
                     carrier_financials=carrier_financials,
                     balance_sheet_data=balance_sheet_data,
+                    defense_contracts=defense_contracts,
                     period_start=start_date,
                     period_end=end_date
                 )
@@ -295,6 +315,7 @@ class InsightsService:
                     carrier_financials=carrier_financials,
                     balance_sheet_data=balance_sheet_data,
                     credit_benchmarks=credit_benchmarks,
+                    defense_contracts=defense_contracts,
                     period_start=start_date,
                     period_end=end_date
                 )
@@ -310,6 +331,7 @@ class InsightsService:
                     sec_filings=sec_filings,
                     carrier_financials=carrier_financials,
                     balance_sheet_data=balance_sheet_data,
+                    defense_contracts=defense_contracts,
                     period_start=start_date,
                     period_end=end_date
                 )
@@ -468,6 +490,20 @@ class InsightsService:
                 except Exception as e:
                     logger.warning(f"⚠️ Could not fetch SEC filings: {e}")
 
+            # Get defense contracts for the week (industry-wide aviation contracts)
+            defense_contracts = []
+            try:
+                defense_contracts = self.db.get_defense_contracts(
+                    start_date=week_start,
+                    end_date=week_end,
+                    aviation_only=True,  # Only aviation-related contracts
+                    limit=20
+                )
+                if defense_contracts:
+                    logger.info(f"✅ Retrieved {len(defense_contracts)} defense contracts for newsletter")
+            except Exception as e:
+                logger.warning(f"⚠️ Could not fetch defense contracts: {e}")
+
             # Log data availability
             if not news_articles:
                 logger.warning(f"⚠️ No news articles found for week {week_start.date()} to {week_end.date()}")
@@ -480,7 +516,8 @@ class InsightsService:
                        f"{len(tsa_data) if tsa_data else 0} TSA records, "
                        f"FRED: {'Yes' if fred_data else 'No'}, "
                        f"Stocks: {len(stock_data) if stock_data else 0} carriers, "
-                       f"SEC: {len(sec_filings) if sec_filings else 0} filings")
+                       f"SEC: {len(sec_filings) if sec_filings else 0} filings, "
+                       f"Defense: {len(defense_contracts) if defense_contracts else 0} contracts")
 
             # Build comprehensive newsletter prompt
             prompt = self._build_newsletter_prompt(
@@ -491,6 +528,7 @@ class InsightsService:
                 fred_data=fred_data,
                 stock_data=stock_data,
                 sec_filings=sec_filings,
+                defense_contracts=defense_contracts,
                 previous_newsletter=previous_newsletter,
                 sections=sections
             )
@@ -534,6 +572,7 @@ class InsightsService:
                     'fred_included': fred_data is not None,
                     'stock_carriers': len(stock_data) if stock_data else 0,
                     'sec_filings': len(sec_filings) if sec_filings else 0,
+                    'defense_contracts': len(defense_contracts) if defense_contracts else 0,
                     'model': 'gemini-2.0-flash-exp'
                 }
             }
@@ -560,6 +599,7 @@ class InsightsService:
         sec_filings: Optional[Dict] = None,
         carrier_financials: Optional[Dict] = None,
         balance_sheet_data: Optional[Dict] = None,
+        defense_contracts: Optional[List[Dict]] = None,
         period_start: datetime = None,
         period_end: datetime = None
     ) -> str:
@@ -586,6 +626,9 @@ class InsightsService:
         # Format balance sheet data
         balance_sheet_summary = self._format_balance_sheet_data(balance_sheet_data)
 
+        # Format defense contracts
+        defense_contracts_summary = self._format_defense_contracts(defense_contracts)
+
         prompt = f"""You are an expert aviation industry analyst. Generate a comprehensive intelligence report about {subject}.
 
 **Report Type**: {report_type.title()}
@@ -607,6 +650,8 @@ class InsightsService:
 {carrier_summary}
 
 {balance_sheet_summary}
+
+{defense_contracts_summary}
 
 **Instructions**:
 Generate a professional, data-driven report in Markdown format with the following sections:
@@ -640,6 +685,8 @@ Generate a professional, data-driven report in Markdown format with the followin
 ## Key Developments
 - List and analyze the most important events
 - Include recent SEC filings (10-K, 10-Q, 8-K)
+- Include significant defense contract awards or losses if available
+- Note government program participation and revenue implications
 - Provide context and industry implications
 
 ## Risk Assessment
@@ -649,6 +696,8 @@ Generate a professional, data-driven report in Markdown format with the followin
 
 ## Outlook & Recommendations
 - Forward-looking analysis
+- Consider defense segment outlook and government spending trends if applicable
+- Evaluate revenue diversification between commercial and government
 - Strategic recommendations based on all available data
 - Investment positioning considerations
 
@@ -675,6 +724,7 @@ Generate the report now:"""
         carrier_financials: Optional[Dict],
         balance_sheet_data: Optional[Dict] = None,
         credit_benchmarks: Optional[Dict] = None,
+        defense_contracts: Optional[List[Dict]] = None,
         period_start: datetime = None,
         period_end: datetime = None
     ) -> str:
@@ -688,6 +738,7 @@ Generate the report now:"""
         sec_summary = self._format_sec_filings(sec_filings)
         carrier_summary = self._format_carrier_financials(carrier_financials)
         balance_sheet_summary = self._format_balance_sheet_data(balance_sheet_data)
+        defense_contracts_summary = self._format_defense_contracts(defense_contracts)
 
         # Format comprehensive credit analysis section (new)
         credit_analysis_summary = self._format_credit_analysis(
@@ -716,6 +767,8 @@ Generate the report now:"""
 {stock_summary}
 
 {sec_summary}
+
+{defense_contracts_summary}
 
 **Required Report Sections** (use these exact H2 headers):
 
@@ -750,6 +803,12 @@ Use the provided credit rating estimation and spread benchmarks to:
 - Covenant compliance status
 - **Risk Level: High/Medium/Low** (use this exact format)
 
+## Defense Segment Credit Impact (if applicable)
+- Evaluate contribution of defense contracts to revenue stability
+- Assess multi-year government contract visibility
+- Consider how government revenue reduces overall default risk
+- Compare commercial vs. defense segment volatility
+
 ## Credit Outlook & Recommendation
 - 12-month credit outlook
 - Probability of rating changes
@@ -779,8 +838,9 @@ Generate the credit analysis report now:"""
         sec_filings: Optional[Dict],
         carrier_financials: Optional[Dict],
         balance_sheet_data: Optional[Dict],
-        period_start: datetime,
-        period_end: datetime
+        defense_contracts: Optional[List[Dict]] = None,
+        period_start: datetime = None,
+        period_end: datetime = None
     ) -> str:
         """Build specialized leasing recommendation prompt from aircraft lessor perspective"""
 
@@ -791,6 +851,7 @@ Generate the credit analysis report now:"""
         stock_summary = self._format_stock_data(stock_data)
         sec_summary = self._format_sec_filings(sec_filings)
         carrier_summary = self._format_carrier_financials(carrier_financials)
+        defense_contracts_summary = self._format_defense_contracts(defense_contracts)
         balance_sheet_summary = self._format_balance_sheet_data(balance_sheet_data)
 
         prompt = f"""You are a senior aircraft leasing analyst. Generate a comprehensive leasing recommendation report for {subject} covering {period_start.strftime('%B %d, %Y')} to {period_end.strftime('%B %d, %Y')}.
@@ -812,6 +873,8 @@ Generate the credit analysis report now:"""
 {carrier_summary}
 
 {balance_sheet_summary}
+
+{defense_contracts_summary}
 
 **Required Report Sections** (use these exact H2 headers):
 
@@ -851,6 +914,12 @@ Provide a 3-4 paragraph overview of the airline's attractiveness as a lessee, ke
 - International vs. domestic exposure
 - Competitive position in key markets
 
+## Government Aircraft Programs (if applicable)
+- Defense contract awards for military aircraft variants
+- Implications for commercial aircraft production timelines
+- Shared supply chain benefits between defense and commercial
+- Government fleet orders affecting lessor inventory
+
 ## Leasing Recommendation
 - **Recommendation**: Favorable / Neutral / Cautious (use this exact format)
 - Preferred aircraft types to lease to this airline
@@ -884,8 +953,9 @@ Generate the leasing recommendation report now:"""
         carrier_financials: Optional[Dict],
         balance_sheet_data: Optional[Dict],
         credit_benchmarks: Optional[Dict],
-        period_start: datetime,
-        period_end: datetime
+        defense_contracts: Optional[List[Dict]] = None,
+        period_start: datetime = None,
+        period_end: datetime = None
     ) -> str:
         """Build comprehensive report combining credit, leasing, and market analysis"""
 
@@ -898,6 +968,7 @@ Generate the leasing recommendation report now:"""
         carrier_summary = self._format_carrier_financials(carrier_financials)
         balance_sheet_summary = self._format_balance_sheet_data(balance_sheet_data)
         credit_analysis_summary = self._format_credit_analysis(balance_sheet_data, credit_benchmarks)
+        defense_contracts_summary = self._format_defense_contracts(defense_contracts)
 
         prompt = f"""You are a senior aviation intelligence analyst. Generate a comprehensive multi-perspective report for {subject} covering {period_start.strftime('%B %d, %Y')} to {period_end.strftime('%B %d, %Y')}.
 
@@ -921,10 +992,12 @@ Generate the leasing recommendation report now:"""
 
 {credit_analysis_summary}
 
+{defense_contracts_summary}
+
 **Required Report Sections** (use these exact H2 headers):
 
 ## Executive Summary
-Provide a 4-5 paragraph overview integrating credit, leasing, and market perspectives. Include the estimated credit rating and key financial metrics.
+Provide a 4-5 paragraph overview integrating credit, leasing, and market perspectives. Include the estimated credit rating, key financial metrics, and defense segment highlights if applicable.
 
 ## Credit Analysis
 ### Credit Rating & Financial Health
@@ -936,6 +1009,7 @@ Provide a 4-5 paragraph overview integrating credit, leasing, and market perspec
 ### Credit Risk Assessment
 - Operational and market risks
 - 12-month credit outlook
+- Defense segment revenue stability contribution (if applicable)
 - **Credit Risk Level: High/Medium/Low** (use this exact format)
 
 ## Leasing Analysis
@@ -948,6 +1022,7 @@ Provide a 4-5 paragraph overview integrating credit, leasing, and market perspec
 - Financial stability as a lessee (reference balance sheet metrics)
 - Operating margins and cash flow (from BTS data)
 - Lease vs. own strategy
+- Government aircraft program impacts on commercial fleet (if applicable)
 - Recommended aircraft types and lease structures
 - **Leasing Risk Level: High/Medium/Low** (use this exact format)
 
@@ -998,7 +1073,8 @@ Generate the comprehensive report now:"""
         fred_data: Optional[Dict],
         stock_data: Optional[Dict],
         sec_filings: Optional[List[Dict]],
-        previous_newsletter: Optional[Dict],
+        defense_contracts: Optional[List[Dict]] = None,
+        previous_newsletter: Optional[Dict] = None,
         sections: Dict[str, bool] = None
     ) -> str:
         """Build comprehensive prompt for weekly newsletter"""
@@ -1026,6 +1102,9 @@ Generate the comprehensive report now:"""
 
         # Format SEC filings
         sec_summary = self._format_newsletter_sec_summary(sec_filings)
+
+        # Format defense contracts
+        defense_summary = self._format_newsletter_defense_summary(defense_contracts)
 
         # Format previous newsletter context
         previous_context = ""
@@ -1098,6 +1177,8 @@ Generate the comprehensive report now:"""
 
 {sec_summary}
 
+{defense_summary}
+
 {previous_context}
 
 **Instructions**:
@@ -1111,6 +1192,7 @@ Generate a professional newsletter in Markdown format with the following section
 - Use specific data points and numbers (stock prices, TSA throughput, credit spreads)
 - Include stock performance in "By The Numbers" section
 - Mention notable SEC filings if material
+- Highlight significant defense contract awards in "By The Numbers" or "Industry Spotlight"
 - Include context for non-expert readers
 - Balance detail with readability
 - Use markdown formatting effectively
@@ -1328,6 +1410,70 @@ Generate the newsletter now:"""
                 formatted += f" - {description}"
             formatted += "\n"
 
+        return formatted
+
+    def _format_defense_contracts(self, contracts: Optional[List[Dict]]) -> str:
+        """Format defense contracts for prompt inclusion"""
+        if not contracts:
+            return "**Defense Contracts**: No recent contracts available for this entity."
+
+        total_value = sum(c.get('contract_value', 0) for c in contracts)
+
+        # Group by branch
+        by_branch = {}
+        for c in contracts:
+            branch = c.get('branch', 'Unknown')
+            if branch not in by_branch:
+                by_branch[branch] = {'count': 0, 'value': 0}
+            by_branch[branch]['count'] += 1
+            by_branch[branch]['value'] += c.get('contract_value', 0)
+
+        # Format value
+        if total_value >= 1_000_000_000:
+            total_formatted = f"${total_value/1_000_000_000:.2f}B"
+        else:
+            total_formatted = f"${total_value/1_000_000:.1f}M"
+
+        formatted = f"""**Defense Contracts** ({len(contracts)} contracts, {total_formatted} total):
+
+By Military Branch:
+"""
+        for branch, data in by_branch.items():
+            value_fmt = f"${data['value']/1_000_000:.1f}M" if data['value'] < 1_000_000_000 else f"${data['value']/1_000_000_000:.2f}B"
+            formatted += f"- {branch}: {data['count']} contracts, {value_fmt}\n"
+
+        formatted += "\nRecent Notable Contracts:\n"
+        for c in contracts[:5]:
+            formatted += f"- {c.get('contractor', 'Unknown')}: {c.get('contract_value_formatted', 'N/A')} ({c.get('branch', 'N/A')})\n"
+            desc = c.get('description', '')
+            if desc:
+                formatted += f"  {desc[:150]}...\n"
+
+        return formatted
+
+    def _format_newsletter_defense_summary(self, contracts: Optional[List[Dict]]) -> str:
+        """Condensed defense contracts summary for newsletter"""
+        if not contracts:
+            return "**Government Contracts**: No significant aviation-related awards this week."
+
+        total_value = sum(c.get('contract_value', 0) for c in contracts)
+        total_fmt = f"${total_value/1_000_000_000:.1f}B" if total_value >= 1_000_000_000 else f"${total_value/1_000_000:.0f}M"
+
+        # Top contractor
+        contractors = {}
+        for c in contracts:
+            name = c.get('contractor', 'Unknown')
+            contractors[name] = contractors.get(name, 0) + c.get('contract_value', 0)
+        top_contractor = max(contractors.items(), key=lambda x: x[1]) if contractors else ('N/A', 0)
+
+        # Get unique branches
+        branches = list(set(c.get('branch', 'Unknown') for c in contracts if c.get('branch')))[:3]
+
+        formatted = f"""**Defense Contract Awards** (Aviation-Related):
+- Total Value This Week: {total_fmt} ({len(contracts)} contracts)
+- Top Contractor: {top_contractor[0]}
+- Key Branches: {', '.join(branches) if branches else 'N/A'}
+"""
         return formatted
 
     def _format_carrier_financials(self, carrier_financials: Optional[Dict]) -> str:
@@ -1582,6 +1728,15 @@ Note: Using estimated spreads (FRED API temporarily unavailable)
 - Average Return: {stock['avg_sector_return']:+.1f}%
 - Positive Movers: {stock['positive_count']}/{stock['total_carriers']} carriers"""
 
+            defense_text = ""
+            if context.get('defense_summary'):
+                defense = context['defense_summary']
+                total_fmt = f"${defense['total_value']/1_000_000_000:.1f}B" if defense['total_value'] >= 1_000_000_000 else f"${defense['total_value']/1_000_000:.0f}M"
+                top_names = ', '.join([c['name'] for c in defense['top_contractors'][:3]]) if defense.get('top_contractors') else 'N/A'
+                defense_text = f"""DEFENSE CONTRACTS (Last 7 Days):
+- Total Value: {total_fmt} ({defense['count']} contracts)
+- Top Contractors: {top_names}"""
+
             # Build Gemini prompt
             prompt = f"""Based on current aviation industry data, identify 3-5 key investment themes.
 
@@ -1592,6 +1747,8 @@ CURRENT MARKET CONTEXT (Last 7 Days):
 {fred_text}
 
 {stock_text}
+
+{defense_text}
 
 MAJOR HEADLINES:
 {chr(10).join(context['headlines']) if context['headlines'] else '• No major headlines this week'}
@@ -1668,7 +1825,7 @@ Investment Themes:"""
 
             # Build quantitative summary
             quant_summary = ""
-            if context.get('tsa_summary') or context.get('fred_summary') or context.get('stock_summary'):
+            if context.get('tsa_summary') or context.get('fred_summary') or context.get('stock_summary') or context.get('defense_summary'):
                 quant_summary = "QUANTITATIVE INDICATORS:\n"
                 if context.get('tsa_summary'):
                     tsa = context['tsa_summary']
@@ -1679,6 +1836,10 @@ Investment Themes:"""
                 if context.get('stock_summary'):
                     stock = context['stock_summary']
                     quant_summary += f"- Sector Performance (5D): {stock['avg_sector_return']:+.1f}%\n"
+                if context.get('defense_summary'):
+                    defense = context['defense_summary']
+                    total_fmt = f"${defense['total_value']/1_000_000_000:.1f}B" if defense['total_value'] >= 1_000_000_000 else f"${defense['total_value']/1_000_000:.0f}M"
+                    quant_summary += f"- Defense Contracts (7D): {total_fmt} ({defense['count']} awards)\n"
 
             # Build Gemini prompt
             prompt = f"""Generate strategic investment recommendation for the aviation sector.
@@ -1751,7 +1912,7 @@ Strategic Recommendation:"""
 
             # Build market indicators section
             indicators_text = ""
-            if context.get('tsa_summary') or context.get('fred_summary') or context.get('stock_summary'):
+            if context.get('tsa_summary') or context.get('fred_summary') or context.get('stock_summary') or context.get('defense_summary'):
                 indicators_text = "MARKET INDICATORS:\n"
                 if context.get('tsa_summary'):
                     tsa = context['tsa_summary']
@@ -1763,6 +1924,10 @@ Strategic Recommendation:"""
                     stock = context['stock_summary']
                     sentiment = "positive" if stock['avg_sector_return'] > 0 else "negative" if stock['avg_sector_return'] < 0 else "neutral"
                     indicators_text += f"- Sector sentiment: {sentiment} ({stock['avg_sector_return']:+.1f}% average return)\n"
+                if context.get('defense_summary'):
+                    defense = context['defense_summary']
+                    total_fmt = f"${defense['total_value']/1_000_000_000:.1f}B" if defense['total_value'] >= 1_000_000_000 else f"${defense['total_value']/1_000_000:.0f}M"
+                    indicators_text += f"- Defense contract awards: {total_fmt} this week\n"
 
             # Build Gemini prompt
             prompt = f"""Generate a professional 2-3 sentence executive summary for aviation industry weekly outlook.
@@ -2000,6 +2165,30 @@ Catalysts:"""
                 except Exception as e:
                     logger.warning(f"⚠️ Could not fetch stock data for market context: {e}")
 
+            # NEW: Get defense contracts summary
+            defense_summary = None
+            try:
+                defense_contracts = self.db.get_defense_contracts(
+                    start_date=start_date,
+                    limit=30
+                )
+                if defense_contracts:
+                    total_value = sum(c.get('contract_value', 0) for c in defense_contracts)
+                    # Get top contractors by value
+                    contractors = {}
+                    for c in defense_contracts:
+                        name = c.get('contractor', 'Unknown')
+                        contractors[name] = contractors.get(name, 0) + c.get('contract_value', 0)
+                    top_contractors = sorted(contractors.items(), key=lambda x: x[1], reverse=True)[:3]
+                    defense_summary = {
+                        'total_value': total_value,
+                        'count': len(defense_contracts),
+                        'top_contractors': [{'name': name, 'value': value} for name, value in top_contractors]
+                    }
+                    logger.info(f"✅ Retrieved {len(defense_contracts)} defense contracts for market context")
+            except Exception as e:
+                logger.warning(f"⚠️ Could not fetch defense contracts for market context: {e}")
+
             return {
                 'headlines': headlines,
                 'operational_risks': op_risks,
@@ -2007,7 +2196,8 @@ Catalysts:"""
                 'article_count': len(recent_news),
                 'tsa_summary': tsa_summary,
                 'fred_summary': fred_summary,
-                'stock_summary': stock_summary
+                'stock_summary': stock_summary,
+                'defense_summary': defense_summary
             }
 
         except Exception as e:
