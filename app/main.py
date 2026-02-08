@@ -1,19 +1,118 @@
 #!/usr/bin/env python3
 """
 Aviation Intelligence API - Live Data Integration with Monitoring
+Version 2.1.0 with API Hardening (Epic 1.7)
 """
 
 import os
 import json
 import logging
+import re
 from datetime import datetime, timedelta
 from flask import Flask, jsonify, request, send_file
 from io import BytesIO
 from flask_cors import CORS
+from flasgger import Swagger
 from app.utils.auth import require_api_key
+from app.utils.errors import register_error_handlers
+from app.utils.rate_limits import limiter, RATE_TIERS
 
 app = Flask(__name__)
-CORS(app, expose_headers=['X-API-Key'], allow_headers=['Content-Type', 'X-API-Key'])
+
+# ============================================================
+# CORS Configuration - Restricted to known origins
+# ============================================================
+CORS(app, resources={
+    r"/api/*": {
+        "origins": [
+            "https://ai.wrfenterprisesllc.com",
+            "https://aviation-intelligence-rmexsuffdq-uc.a.run.app",
+            re.compile(r"^http://localhost(:\d+)?$"),
+            re.compile(r"^http://127\.0\.0\.1(:\d+)?$")
+        ],
+        "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+        "allow_headers": ["Content-Type", "X-API-Key", "Authorization"],
+        "expose_headers": [
+            "X-API-Key",
+            "X-RateLimit-Limit",
+            "X-RateLimit-Remaining",
+            "X-RateLimit-Reset",
+            "X-Deprecation-Warning",
+            "X-Request-ID"
+        ],
+        "max_age": 3600
+    },
+    r"/health": {"origins": "*"},
+    r"/ready": {"origins": "*"},
+    r"/api/docs*": {"origins": "*"}
+})
+
+# ============================================================
+# Rate Limiter Initialization
+# ============================================================
+limiter.init_app(app)
+
+# ============================================================
+# Error Handlers
+# ============================================================
+register_error_handlers(app)
+
+# ============================================================
+# Swagger/OpenAPI Documentation
+# ============================================================
+swagger_config = {
+    "headers": [],
+    "specs": [
+        {
+            "endpoint": "apispec",
+            "route": "/api/v1/docs/apispec.json",
+            "rule_filter": lambda rule: rule.rule.startswith("/api/"),
+            "model_filter": lambda tag: True,
+        }
+    ],
+    "static_url_path": "/flasgger_static",
+    "swagger_ui": True,
+    "specs_route": "/api/docs"
+}
+
+swagger_template = {
+    "swagger": "2.0",
+    "info": {
+        "title": "Aviation Intelligence Platform API",
+        "description": "Market intelligence, credit scoring, and deal evaluation for aviation finance professionals.",
+        "version": "1.0.0",
+        "contact": {
+            "name": "WRF Enterprises LLC",
+            "email": "admin@wrfenterprisesllc.com",
+            "url": "https://ai.wrfenterprisesllc.com"
+        }
+    },
+    "host": "aviation-intelligence-api-rmexsuffdq-uc.a.run.app",
+    "basePath": "/api/v1",
+    "schemes": ["https"],
+    "securityDefinitions": {
+        "ApiKeyAuth": {
+            "type": "apiKey",
+            "in": "header",
+            "name": "X-API-Key",
+            "description": "API key for authenticated endpoints"
+        }
+    },
+    "tags": [
+        {"name": "Health", "description": "Health and status endpoints"},
+        {"name": "Market Data", "description": "Live market data (TSA, FRED, fuel prices)"},
+        {"name": "News", "description": "News article ingestion and management"},
+        {"name": "Reports", "description": "AI-generated intelligence reports"},
+        {"name": "Newsletters", "description": "Weekly newsletter generation"},
+        {"name": "Carriers", "description": "Airline carrier financial data"},
+        {"name": "Deals", "description": "Aircraft deal evaluation and pricing"},
+        {"name": "Credit Scores", "description": "Airline credit scoring system"},
+        {"name": "Backtesting", "description": "Credit model validation and backtesting"},
+        {"name": "Scheduler", "description": "Data ingestion and scheduled jobs"}
+    ]
+}
+
+swagger = Swagger(app, config=swagger_config, template=swagger_template)
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -186,26 +285,57 @@ except Exception as e:
     backtest_validation = None
     backtest_report = None
 
+import uuid
+from flask import g
+
 @app.before_request
 def before_request():
-    """Record request start time for monitoring"""
+    """Record request start time and generate request ID for tracking"""
+    g.request_id = str(uuid.uuid4())[:8]
+    g.start_time = datetime.now()
     if monitor:
-        request.start_time = datetime.now()
+        request.start_time = g.start_time
 
 @app.after_request
 def after_request(response):
-    """Record request metrics for monitoring"""
+    """Record request metrics, add headers, and log completed requests"""
+    duration_ms = (datetime.now() - getattr(g, 'start_time', datetime.now())).total_seconds() * 1000
+
+    # Add request ID to response headers for debugging
+    if hasattr(g, 'request_id'):
+        response.headers['X-Request-ID'] = g.request_id
+
+    # Record monitoring metrics
     if monitor and hasattr(request, 'start_time'):
-        response_time = (datetime.now() - request.start_time).total_seconds() * 1000
-        monitor.record_request(request.path, response.status_code, response_time)
+        monitor.record_request(request.path, response.status_code, duration_ms)
+
+    # Log request (skip health checks to reduce noise)
+    if request.path not in ('/health', '/ready'):
+        logger.info(
+            f"[{getattr(g, 'request_id', 'N/A')}] {request.method} {request.path} "
+            f"-> {response.status_code} ({duration_ms:.1f}ms)"
+        )
+
     return response
 
 @app.route('/')
+@limiter.exempt
 def root():
+    """
+    API Root - Service information and endpoint listing
+    ---
+    tags:
+      - Health
+    responses:
+      200:
+        description: Service information
+    """
     return jsonify({
-        'service': 'Aviation Intelligence API',
+        'service': 'Aviation Intelligence Platform API',
         'status': 'operational',
         'version': '2.1.0',
+        'api_version': 'v1',
+        'documentation': '/api/docs',
         'features': {
             'live_fred_data': fred_service is not None,
             'live_tsa_data': tsa_service is not None,
@@ -215,75 +345,162 @@ def root():
             'ai_insights': insights_service is not None,
             'credit_scoring': credit_score_service is not None
         },
-        'endpoints': [
-            '/health',
-            '/api/status',
-            '/api/credit-spread/current',
-            '/api/tsa/current',
-            '/api/monitoring/health',
-            '/api/monitoring/metrics',
-            '/api/news/ingest',
-            '/api/news/articles',
-            '/api/news/<article_id>',
-            '/api/news/stats',
-            '/api/tsa/historical',
-            '/api/credit-spread/historical',
-            '/api/reports/generate',
-            '/api/reports/<id>',
-            '/api/reports',
-            '/api/newsletter/generate',
-            '/api/newsletter/latest',
-            '/api/newsletter/<id>',
-            '/api/credit-scores',
-            '/api/credit-scores/<code>',
-            '/api/credit-scores/<code>/refresh',
-            '/api/credit-scores/refresh-all',
-            '/api/credit-scores/<code>/history'
-        ]
-    })
-
-@app.route('/health')
-def health():
-    return jsonify({
-        'status': 'healthy',
-        'service': 'aviation-intelligence-api',
-        'timestamp': datetime.now().isoformat(),
-        'platform': 'Google Cloud Run',
-        'integrations': {
-            'fred_service': 'active' if fred_service else 'fallback',
-            'tsa_service': 'active' if tsa_service else 'fallback',
-            'monitoring': 'active' if monitor else 'disabled',
-            'news_service': 'active' if news_service else 'disabled',
-            'database_service': 'active' if db_service else 'disabled',
-            'credit_scoring': 'active' if credit_score_service else 'disabled'
+        'endpoints': {
+            'health': '/health',
+            'ready': '/ready',
+            'status': '/api/v1/status',
+            'docs': '/api/docs',
+            'market_data': '/api/v1/credit-spread/current, /api/v1/tsa/current',
+            'news': '/api/v1/news/articles',
+            'reports': '/api/v1/reports',
+            'credit_scores': '/api/v1/credit-scores',
+            'deals': '/api/v1/deals/evaluate'
+        },
+        'authentication': {
+            'type': 'API Key',
+            'header': 'X-API-Key',
+            'required_for': 'Most write operations and data access'
         }
     })
 
+@app.route('/health')
+@limiter.exempt
+def health():
+    """
+    Basic health check - Is the service running?
+    ---
+    tags:
+      - Health
+    responses:
+      200:
+        description: Service is healthy
+        schema:
+          type: object
+          properties:
+            status:
+              type: string
+              example: healthy
+            service:
+              type: string
+            timestamp:
+              type: string
+              format: date-time
+    """
+    return jsonify({
+        'status': 'healthy',
+        'service': 'aviation-intelligence-api',
+        'version': '2.1.0',
+        'timestamp': datetime.now().isoformat()
+    })
+
+
+@app.route('/ready')
+@limiter.exempt
+def ready():
+    """
+    Readiness check - Can the service handle requests?
+    Verifies database and critical service availability.
+    ---
+    tags:
+      - Health
+    responses:
+      200:
+        description: Service is ready
+      503:
+        description: Service not ready (dependency unavailable)
+    """
+    checks = {
+        'database': db_service is not None,
+        'fred_service': fred_service is not None,
+        'tsa_service': tsa_service is not None,
+        'credit_scoring': credit_score_service is not None
+    }
+
+    # Quick database connectivity test
+    if db_service:
+        try:
+            db_service.db.collection('config').document('health_check').get()
+            checks['database_connected'] = True
+        except Exception:
+            checks['database_connected'] = False
+
+    all_ready = checks.get('database', False) and checks.get('database_connected', False)
+    status_code = 200 if all_ready else 503
+
+    return jsonify({
+        'status': 'ready' if all_ready else 'not_ready',
+        'checks': {k: 'ok' if v else 'failed' for k, v in checks.items()},
+        'timestamp': datetime.now().isoformat()
+    }), status_code
+
+
 @app.route('/api/status')
+@app.route('/api/v1/status')
+@limiter.limit(RATE_TIERS['public'])
 def api_status():
+    """
+    API status with service details
+    ---
+    tags:
+      - Health
+    responses:
+      200:
+        description: Detailed API status
+    """
     return jsonify({
         'status': 'operational',
-        'service': 'Aviation Intelligence API',
+        'service': 'Aviation Intelligence Platform API',
+        'version': '2.1.0',
+        'api_version': 'v1',
         'platform': 'Google Cloud Run',
+        'documentation': '/api/docs',
         'timestamp': datetime.now().isoformat(),
-        'data_sources': {
-            'fred': 'Federal Reserve Economic Data - Live API',
-            'tsa': 'TSA Checkpoint Data - Live Scraping + Enhanced Modeling',
-            'eia': 'Energy Information Administration - Coming Soon'
-        },
-        'integrations': {
+        'services': {
             'fred_service': 'active' if fred_service else 'fallback',
             'tsa_service': 'active' if tsa_service else 'fallback',
             'monitoring': 'active' if monitor else 'disabled',
             'news_service': 'active' if news_service else 'disabled',
-            'database_service': 'active' if db_service else 'disabled',
-            'live_data': True
+            'database': 'active' if db_service else 'disabled',
+            'credit_scoring': 'active' if credit_score_service else 'disabled',
+            'deal_evaluator': 'active' if deal_evaluator_service else 'disabled'
         }
     })
 
 @app.route('/api/credit-spread/current')
+@limiter.limit(RATE_TIERS['public'])
 def get_credit_spread():
-    """Federal Reserve credit spread data - LIVE INTEGRATION with MONITORING"""
+    """
+    Get current FRED credit spread data
+    ---
+    tags:
+      - Market Data
+    summary: Federal Reserve credit spread data
+    description: Returns current corporate bond vs treasury spread from FRED
+    responses:
+      200:
+        description: Credit spread data
+        schema:
+          type: object
+          properties:
+            success:
+              type: boolean
+            data:
+              type: object
+              properties:
+                credit_spread_bps:
+                  type: integer
+                  description: Spread in basis points
+                spread_description:
+                  type: string
+                risk_level:
+                  type: string
+                  enum: [low, moderate, elevated, high]
+            timestamp:
+              type: string
+              format: date-time
+      503:
+        description: Service unavailable
+    """
     start_time = datetime.now()
     
     try:
@@ -3569,11 +3786,29 @@ def save_deal_evaluation():
 # ========== CREDIT SCORING ENDPOINTS ==========
 
 @app.route('/api/credit-scores', methods=['GET'])
+@limiter.limit(RATE_TIERS['auth_read'])
 def get_all_credit_scores():
     """
-    Get current credit scores for all airlines.
-
-    Returns list of airline credit scores with overall score, grade, and dimension scores.
+    Get all airline credit scores
+    ---
+    tags:
+      - Credit Scores
+    summary: List all credit scores
+    description: Returns current credit scores for all 8 tracked US airlines
+    responses:
+      200:
+        description: List of credit scores
+        schema:
+          type: object
+          properties:
+            success:
+              type: boolean
+            scores:
+              type: array
+            count:
+              type: integer
+      503:
+        description: Credit scoring service unavailable
     """
     start_time = datetime.now()
 
@@ -3605,12 +3840,29 @@ def get_all_credit_scores():
 
 
 @app.route('/api/credit-scores/<code>', methods=['GET'])
+@limiter.limit(RATE_TIERS['auth_read'])
 def get_credit_score(code):
     """
-    Get full credit score breakdown for a specific airline.
-
-    Args:
-        code: Airline ticker (DAL, UAL, AAL, LUV, JBLU, ALK, SAVE, ULCC)
+    Get credit score for a specific airline
+    ---
+    tags:
+      - Credit Scores
+    summary: Get airline credit score
+    description: Returns full credit score breakdown including all 4 dimensions
+    parameters:
+      - name: code
+        in: path
+        type: string
+        required: true
+        description: Airline ticker
+        enum: [DAL, UAL, AAL, LUV, JBLU, ALK, SAVE, ULCC]
+    responses:
+      200:
+        description: Full credit score breakdown
+      404:
+        description: Airline not found or not yet scored
+      503:
+        description: Credit scoring service unavailable
     """
     start_time = datetime.now()
 
@@ -3976,10 +4228,28 @@ def seed_credit_ratings():
 
 @app.route('/api/credit-scores/backtest/collect-data', methods=['POST'])
 @require_api_key
+@limiter.limit(RATE_TIERS['heavy'])
 def collect_backtest_data():
     """
-    Collect historical data for all 8 airlines.
-    Hits SEC EDGAR and yfinance - respect rate limits.
+    Collect historical backtest data
+    ---
+    tags:
+      - Backtesting
+    summary: Collect historical data for backtesting
+    description: |
+      Collects historical financial data from SEC EDGAR and stock data from Yahoo Finance
+      for all 8 tracked airlines. This is a heavy operation - rate limited to 5/min.
+    security:
+      - ApiKeyAuth: []
+    responses:
+      200:
+        description: Data collection summary
+      401:
+        description: Authentication required
+      429:
+        description: Rate limit exceeded (5/min)
+      503:
+        description: Backtest service unavailable
 
     Returns: Summary of data collected per airline
     """
@@ -4019,16 +4289,42 @@ def collect_backtest_data():
 
 @app.route('/api/credit-scores/backtest/run', methods=['POST'])
 @require_api_key
+@limiter.limit(RATE_TIERS['heavy'])
 def run_backtest():
     """
-    Run full backtest across all airlines and quarter ends.
-
-    Body (optional):
-        - weights: Dict with weight overrides
-        - start_year: Start year (default 2015)
-        - end_year: End year (default current year)
-
-    Returns: Full backtest results with summary metrics
+    Run credit model backtest
+    ---
+    tags:
+      - Backtesting
+    summary: Run full backtest
+    description: |
+      Runs retrospective credit scoring across all airlines for specified date range.
+      Heavy computation - rate limited to 5/min.
+    security:
+      - ApiKeyAuth: []
+    parameters:
+      - name: body
+        in: body
+        schema:
+          type: object
+          properties:
+            weights:
+              type: object
+              description: Weight overrides
+            start_year:
+              type: integer
+              default: 2015
+            end_year:
+              type: integer
+    responses:
+      200:
+        description: Backtest results with metrics
+      401:
+        description: Authentication required
+      429:
+        description: Rate limit exceeded (5/min)
+      503:
+        description: Service unavailable
     """
     start_time = datetime.now()
 
@@ -4475,6 +4771,52 @@ def get_historical_score(code):
             'error': str(e),
             'timestamp': datetime.now().isoformat()
         }), 500
+
+
+# ============================================================
+# API v1 Route Registration
+# Duplicate all /api/ routes to /api/v1/ for versioning
+# ============================================================
+def register_v1_routes():
+    """
+    Register all /api/ routes with /api/v1/ prefix.
+    This maintains backward compatibility while enabling versioned API access.
+    """
+    # Get all existing rules
+    rules_to_add = []
+    for rule in app.url_map.iter_rules():
+        if rule.rule.startswith('/api/') and not rule.rule.startswith('/api/v1/') and not rule.rule.startswith('/api/docs'):
+            # Create the v1 version of the route
+            v1_rule = rule.rule.replace('/api/', '/api/v1/', 1)
+            rules_to_add.append((v1_rule, rule.endpoint, rule.methods - {'OPTIONS', 'HEAD'}))
+
+    # Add v1 routes
+    for v1_rule, endpoint, methods in rules_to_add:
+        try:
+            # Skip if already registered
+            existing_rules = [r.rule for r in app.url_map.iter_rules()]
+            if v1_rule not in existing_rules:
+                app.add_url_rule(v1_rule, endpoint=f"v1_{endpoint}", view_func=app.view_functions[endpoint], methods=list(methods))
+        except Exception as e:
+            logger.warning(f"Could not register v1 route {v1_rule}: {e}")
+
+    logger.info(f"✅ Registered {len(rules_to_add)} API v1 routes")
+
+
+# Register v1 routes
+register_v1_routes()
+
+# ============================================================
+# Legacy API Redirects
+# Redirect old /api/ paths to /api/v1/ with deprecation warning
+# Note: Legacy redirects are optional - both paths work for now
+# ============================================================
+from app.api.legacy import legacy_bp
+# Uncomment the line below to enable legacy redirects (will break direct /api/ access)
+# app.register_blueprint(legacy_bp)
+
+logger.info("🚀 Aviation Intelligence API initialized with API Hardening v1.0")
+logger.info(f"📚 API Documentation available at /api/docs")
 
 
 if __name__ == '__main__':
