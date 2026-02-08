@@ -1746,18 +1746,23 @@ class DatabaseService:
             if 'airline_code' not in history_data:
                 raise ValueError("Missing required field: airline_code")
 
+            # Serialize data for Firestore compatibility
+            serialized_data = self._serialize_for_firestore(history_data)
+
             # Add timestamp if not present
-            if 'calculated_at' not in history_data:
-                history_data['calculated_at'] = datetime.now()
+            if 'calculated_at' not in serialized_data or not isinstance(serialized_data.get('calculated_at'), datetime):
+                serialized_data['calculated_at'] = datetime.now()
 
             doc_ref = self.db.collection('airline_credit_score_history').document()
-            doc_ref.set(history_data)
+            doc_ref.set(serialized_data)
 
-            self.logger.info(f"✅ Saved credit score history for {history_data['airline_code']}")
+            self.logger.info(f"✅ Saved credit score history for {serialized_data['airline_code']}")
             return doc_ref.id
 
         except Exception as e:
             self.logger.error(f"Error saving credit score history: {e}")
+            import traceback
+            self.logger.error(traceback.format_exc())
             return None
 
     def get_credit_score_history(
