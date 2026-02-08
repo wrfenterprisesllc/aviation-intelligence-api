@@ -7,7 +7,8 @@ import os
 import json
 import logging
 from datetime import datetime, timedelta
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify, request, send_file
+from io import BytesIO
 from flask_cors import CORS
 from app.utils.auth import require_api_key
 
@@ -105,6 +106,15 @@ try:
 except Exception as e:
     logger.warning(f"⚠️ Deal Evaluator service initialization failed: {e}")
     deal_evaluator_service = None
+
+# PDF Service
+try:
+    from app.services.pdf_service import PDFService
+    pdf_service = PDFService()
+    logger.info("✅ PDF service initialized")
+except Exception as e:
+    logger.warning(f"⚠️ PDF service initialization failed: {e}")
+    pdf_service = None
 
 @app.before_request
 def before_request():
@@ -1253,6 +1263,64 @@ def get_report(report_id):
             'message': str(e),
             'timestamp': datetime.now().isoformat()
         }), 500
+
+
+@app.route('/api/reports/<report_id>/pdf', methods=['GET'])
+def get_report_pdf(report_id):
+    """
+    Generate and download PDF for an airline intelligence report.
+
+    This endpoint is public (no API key required) since the report data
+    is already accessible via GET /api/reports/<id>.
+
+    Returns:
+        PDF file download with Content-Disposition header
+    """
+    try:
+        if not db_service:
+            return jsonify({
+                'success': False,
+                'error': 'Database service not available'
+            }), 503
+
+        if not pdf_service:
+            return jsonify({
+                'success': False,
+                'error': 'PDF service not available'
+            }), 503
+
+        # Fetch the report
+        report = db_service.get_airline_report(report_id)
+        if not report:
+            return jsonify({
+                'success': False,
+                'error': 'Report not found'
+            }), 404
+
+        # Generate PDF
+        logger.info(f"📄 Generating PDF for report: {report_id}")
+        pdf_bytes = pdf_service.generate_airline_report_pdf(report)
+
+        # Generate filename
+        subject = report.get('subject', 'Report').replace(' ', '_').replace('/', '-')
+        report_type = report.get('report_type', 'Analysis').replace('_', ' ').title().replace(' ', '_')
+        date_str = datetime.now().strftime('%Y-%m-%d')
+        filename = f"{subject}_{report_type}_{date_str}.pdf"
+
+        return send_file(
+            BytesIO(pdf_bytes),
+            mimetype='application/pdf',
+            as_attachment=True,
+            download_name=filename
+        )
+
+    except Exception as e:
+        logger.error(f"❌ PDF generation failed: {e}", exc_info=True)
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
 
 @app.route('/api/reports', methods=['GET'])
 def list_reports():
@@ -3097,6 +3165,182 @@ def price_deal():
             'success': False,
             'error': str(e),
             'timestamp': datetime.now().isoformat()
+        }), 500
+
+
+@app.route('/api/deals/evaluate/pdf', methods=['POST'])
+@require_api_key
+def evaluate_deal_pdf():
+    """
+    Evaluate a deal and return PDF instead of JSON.
+
+    Same request body as POST /api/deals/evaluate.
+    Returns PDF file download.
+    """
+    try:
+        if not deal_evaluator_service:
+            return jsonify({
+                'success': False,
+                'error': 'Deal evaluator service not available'
+            }), 503
+
+        if not pdf_service:
+            return jsonify({
+                'success': False,
+                'error': 'PDF service not available'
+            }), 503
+
+        data = request.get_json()
+        if not data:
+            return jsonify({
+                'success': False,
+                'error': 'Request body required'
+            }), 400
+
+        # Validate required fields
+        required_fields = ['aircraft_type', 'purchase_price', 'credit_tier']
+        for field in required_fields:
+            if field not in data:
+                return jsonify({
+                    'success': False,
+                    'error': f'Missing required field: {field}'
+                }), 400
+
+        # Build params dict - handle both field naming conventions
+        params = {
+            'aircraft_type': data['aircraft_type'],
+            'current_age': float(data.get('current_age', data.get('aircraft_age', 0))),
+            'lease_term': int(data.get('lease_term', data.get('lease_term_years', 8))),
+            'monthly_rent': float(data.get('monthly_rent', 0)),
+            'step_up_pct': float(data.get('step_up_pct', 0)),
+            'maintenance_reserve': float(data.get('maintenance_reserve', data.get('monthly_maintenance_reserve', 0))),
+            'transition_cost': float(data.get('transition_cost', 0)),
+            'purchase_price': float(data['purchase_price']),
+            'credit_tier': data['credit_tier'],
+            'lessee_name': data.get('lessee_name', 'Unknown')
+        }
+
+        # Add residual if provided
+        if data.get('residual_value'):
+            params['residual_value'] = float(data['residual_value'])
+
+        # Evaluate the deal
+        logger.info(f"📄 Generating PDF for deal evaluation: {params['aircraft_type']} for {params['lessee_name']}")
+        results = deal_evaluator_service.evaluate_deal(params)
+
+        # Generate PDF
+        pdf_bytes = pdf_service.generate_deal_memo_pdf(params, results, mode='evaluate')
+
+        # Generate filename
+        aircraft = params['aircraft_type'].replace(' ', '_').replace('/', '-')
+        date_str = datetime.now().strftime('%Y-%m-%d')
+        filename = f"{aircraft}_Deal_Memo_{date_str}.pdf"
+
+        return send_file(
+            BytesIO(pdf_bytes),
+            mimetype='application/pdf',
+            as_attachment=True,
+            download_name=filename
+        )
+
+    except ValueError as e:
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 400
+    except Exception as e:
+        logger.error(f"❌ Deal evaluation PDF failed: {e}", exc_info=True)
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+
+@app.route('/api/deals/price/pdf', methods=['POST'])
+@require_api_key
+def price_deal_pdf():
+    """
+    Price a deal and return PDF instead of JSON.
+
+    Same request body as POST /api/deals/price.
+    Returns PDF file download.
+    """
+    try:
+        if not deal_evaluator_service:
+            return jsonify({
+                'success': False,
+                'error': 'Deal evaluator service not available'
+            }), 503
+
+        if not pdf_service:
+            return jsonify({
+                'success': False,
+                'error': 'PDF service not available'
+            }), 503
+
+        data = request.get_json()
+        if not data:
+            return jsonify({
+                'success': False,
+                'error': 'Request body required'
+            }), 400
+
+        # Validate required fields
+        required_fields = ['aircraft_type', 'target_irr', 'credit_tier']
+        for field in required_fields:
+            if field not in data:
+                return jsonify({
+                    'success': False,
+                    'error': f'Missing required field: {field}'
+                }), 400
+
+        # Build params dict
+        params = {
+            'aircraft_type': data['aircraft_type'],
+            'current_age': float(data.get('current_age', data.get('aircraft_age', 0))),
+            'lease_term': int(data.get('lease_term', data.get('lease_term_years', 8))),
+            'monthly_rent': float(data.get('monthly_rent', 0)),
+            'step_up_pct': float(data.get('step_up_pct', 0)),
+            'maintenance_reserve': float(data.get('maintenance_reserve', data.get('monthly_maintenance_reserve', 0))),
+            'transition_cost': float(data.get('transition_cost', 0)),
+            'target_irr': float(data['target_irr']),
+            'credit_tier': data['credit_tier'],
+            'lessee_name': data.get('lessee_name', 'Unknown')
+        }
+
+        # Add residual if provided
+        if data.get('residual_value'):
+            params['residual_value'] = float(data['residual_value'])
+
+        # Price the deal
+        logger.info(f"📄 Generating PDF for deal pricing: {params['aircraft_type']} for {params['lessee_name']}")
+        results = deal_evaluator_service.price_deal(params)
+
+        # Generate PDF
+        pdf_bytes = pdf_service.generate_deal_memo_pdf(params, results, mode='price')
+
+        # Generate filename
+        aircraft = params['aircraft_type'].replace(' ', '_').replace('/', '-')
+        date_str = datetime.now().strftime('%Y-%m-%d')
+        filename = f"{aircraft}_Pricing_Memo_{date_str}.pdf"
+
+        return send_file(
+            BytesIO(pdf_bytes),
+            mimetype='application/pdf',
+            as_attachment=True,
+            download_name=filename
+        )
+
+    except ValueError as e:
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 400
+    except Exception as e:
+        logger.error(f"❌ Deal pricing PDF failed: {e}", exc_info=True)
+        return jsonify({
+            'success': False,
+            'error': str(e)
         }), 500
 
 

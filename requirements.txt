@@ -43,3 +43,6 @@ flask-limiter==3.5.0
 
 # Financial data
 yfinance>=0.2.40
+
+# PDF generation
+reportlab>=4.0.0
