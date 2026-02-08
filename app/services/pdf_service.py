@@ -21,8 +21,7 @@ from reportlab.platypus import (
     SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle,
     PageBreak, KeepTogether
 )
-from reportlab.pdfbase import pdfmetrics
-from reportlab.pdfbase.ttfonts import TTFont
+# Note: Using default fonts to avoid system font dependencies
 
 logger = logging.getLogger(__name__)
 
@@ -54,9 +53,13 @@ class PDFService:
 
     def __init__(self):
         """Initialize PDF service with custom styles."""
-        self.styles = getSampleStyleSheet()
-        self._setup_custom_styles()
-        logger.info("✅ PDF Service initialized")
+        try:
+            self.styles = getSampleStyleSheet()
+            self._setup_custom_styles()
+            logger.info("✅ PDF Service initialized")
+        except Exception as e:
+            logger.error(f"❌ PDF Service initialization failed: {e}")
+            raise
 
     def _setup_custom_styles(self):
         """Create custom paragraph styles for reports."""
