@@ -1633,6 +1633,8 @@ class DatabaseService:
 
         except Exception as e:
             self.logger.error(f"Error saving credit score: {e}")
+            import traceback
+            self.logger.error(traceback.format_exc())
             return None
 
     def get_credit_score(self, airline_code: str) -> Optional[Dict[str, Any]]:
