@@ -96,6 +96,8 @@ https://aviation-intelligence-api-rmexsuffdq-uc.a.run.app
 - `POST /api/news/ingest` - Ingest news articles
 - `POST /api/reports/generate` - Generate AI-powered airline reports
 - `POST /api/newsletter/generate` - Generate AI-powered newsletters
+- `POST /api/ingest/defense-contracts` - Ingest defense contracts from defense.gov
+- `POST /api/ingest/financial-data` - Pre-load FRED, TSA, carrier financials
 
 ### Public Endpoints (no authentication)
 
@@ -126,6 +128,13 @@ GET /api/news/stats          # News statistics
 GET /api/reports/<id>         # Get specific report
 GET /api/newsletter/<id>      # Get specific newsletter
 GET /api/newsletter/latest    # Get most recent newsletter
+```
+
+#### Defense Contracts
+```bash
+GET /api/defense-contracts              # Query defense contracts with filters
+GET /api/defense-contracts/summary      # Aggregate statistics by branch/contractor
+GET /api/defense-contracts/test         # Test connection to defense.gov
 ```
 
 ### Example API Calls
@@ -212,6 +221,22 @@ Max requests per worker: 1000
 
 Push to GitHub triggers automatic deployment.
 
+### Cloud Scheduler Jobs
+
+Automated ingestion jobs run daily/weekly:
+
+| Job Name | Schedule | Description |
+|----------|----------|-------------|
+| `aviation-news-daily-ingestion` | 6:00 AM ET | RSS feeds + NewsAPI ingestion |
+| `aviation-sec-weekly-ingestion` | Sunday midnight ET | SEC EDGAR filings |
+| `aviation-financial-daily-ingestion` | 7:00 AM ET | FRED, carrier financials, TSA, BTS |
+| `aviation-defense-contracts-daily` | 8:00 AM ET | DoD aviation contracts from defense.gov |
+
+**Deploy scheduler jobs:**
+```bash
+./deploy-scheduler-jobs.sh
+```
+
 ## GCP Configuration
 
 ### Project Details
@@ -235,6 +260,9 @@ Collections:
   - weekly_newsletters
   - tsa_data
   - fred_data
+  - defense_contracts
+  - financial_snapshots
+  - carrier_financial_snapshots
 ```
 
 ### IAM & Security
@@ -706,6 +734,9 @@ Tag-based filtering of news articles for risk categories:
 11. ✅ Added `get_recent_data()` method to TSADataService
 12. ✅ **Multi-Type Airline Reports** - General, Credit, M&A, Fleet analysis with specialized prompts
 13. ✅ **Reports Archive API** - GET endpoint to retrieve previously generated reports by subject
+14. ✅ **Defense Contracts Collection** - Scrape daily DoD aviation contracts from defense.gov
+15. ✅ **Financial Data Pre-loading** - FRED, TSA, carrier financials via Cloud Scheduler
+16. ✅ **Defense Contracts in AI Prompts** - Integrated into all report types, newsletter, weekly outlook
 
 ### Frontend (aviation-intelligence)
 1. ✅ Restored `dashboard.html` from commit 42f212d
@@ -775,8 +806,8 @@ Tag-based filtering of news articles for risk categories:
 
 ---
 
-**Last Updated:** 2026-02-04
-**Platform Version:** 4.0.0 (Complete UI Redesign - Phase 4 Complete)
+**Last Updated:** 2026-02-07
+**Platform Version:** 5.0.0 (Defense Contracts + Financial Data Integration)
 **Status:** ✅ Production Ready
 
 ## Quick Start for New Sessions
@@ -793,6 +824,15 @@ When starting a new chat session, provide this document as context. Key things t
 8. **Design token system** - All colors, spacing, shadows use CSS variables for theme consistency
 9. **7-day cache for catalysts, 24h for other AI insights** - Minimizes API costs
 10. **All endpoints tested and working** - Full test suite provided in Troubleshooting section
+11. **Defense contracts collection** - Daily DoD aviation contract scraping from defense.gov (8:00 AM ET)
+12. **Defense data in AI prompts** - All report types, newsletter, weekly outlook include defense context
+13. **Financial data pre-loading** - FRED, TSA, carrier financials cached via Cloud Scheduler
+
+**Cloud Scheduler Jobs (deploy with `./deploy-scheduler-jobs.sh`):**
+- 6:00 AM ET: News ingestion (RSS + NewsAPI)
+- 7:00 AM ET: Financial data (FRED, TSA, BTS)
+- 8:00 AM ET: Defense contracts (defense.gov)
+- Sunday midnight ET: SEC EDGAR filings
 
 **Common next steps:**
 - Run news ingestion to populate database with tagged articles for risk monitoring

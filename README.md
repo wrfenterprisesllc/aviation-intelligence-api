@@ -23,6 +23,12 @@ Backend REST API for the Aviation Intelligence Platform - a professional market 
 - **AI Enhancement:** Impact statements and analysis for major developments
 - **Archive System:** Firestore-backed persistent storage with retrieval
 
+### 🛡️ Defense Contracts
+- **Daily DoD Scraping:** Aviation-related contracts from defense.gov
+- **Contract Analytics:** Aggregation by branch, contractor, and value
+- **AI Integration:** Defense data flows into all report types and newsletters
+- **Retry Logic:** User agent rotation to handle rate limiting
+
 ### 🎯 Weekly Outlook
 - **12 Live Data Points:** Executive summary, market metrics, risks, catalysts, themes
 - **AI-Generated Catalysts:** Upcoming industry events with 7-day cache
@@ -67,6 +73,15 @@ This service auto-deploys to Cloud Run when code is pushed to the `main` branch 
 - `GET /api/weekly-outlook/catalysts` - Upcoming industry catalysts (7-day cache)
 - `GET /api/weekly-outlook/load-factor` - Industry load factor calculation
 
+### 🛡️ Defense Contracts (Public)
+- `GET /api/defense-contracts` - Query contracts with filters (date, branch, contractor)
+- `GET /api/defense-contracts/summary` - Aggregate statistics by branch and contractor
+- `GET /api/defense-contracts/test` - Test connection to defense.gov
+
+### ⚙️ Data Ingestion (Protected - Requires API Key)
+- `POST /api/ingest/defense-contracts` - Ingest DoD contracts from defense.gov
+- `POST /api/ingest/financial-data` - Pre-load FRED, TSA, carrier financials
+
 ### 🔧 System (Public)
 - `GET /health` - Health check
 - `GET /api/status` - Service status
@@ -86,10 +101,21 @@ curl -X POST https://aviation-intelligence-api-rmexsuffdq-uc.a.run.app/api/repor
   -d '{"subject":"United Airlines","report_type":"credit","days":30}'
 ```
 
+## Cloud Scheduler Jobs
+
+Automated ingestion runs daily/weekly via Cloud Scheduler:
+
+| Job | Schedule | Description |
+|-----|----------|-------------|
+| `aviation-news-daily-ingestion` | 6:00 AM ET | RSS + NewsAPI |
+| `aviation-financial-daily-ingestion` | 7:00 AM ET | FRED, TSA, BTS |
+| `aviation-defense-contracts-daily` | 8:00 AM ET | DoD contracts |
+| `aviation-sec-weekly-ingestion` | Sunday midnight ET | SEC Edgar |
+
 ## Architecture
 
 **Backend:** Python 3.11 + Flask + Gunicorn
 **Database:** Google Firestore (Native Mode)
 **AI Engine:** Google Gemini 2.0 Flash
-**External APIs:** FRED, TSA.gov, EIA, NewsAPI, SEC Edgar
+**External APIs:** FRED, TSA.gov, EIA, NewsAPI, SEC Edgar, defense.gov
 **Deployment:** Cloud Run with automated CI/CD via Cloud Build
