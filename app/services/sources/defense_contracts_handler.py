@@ -20,16 +20,21 @@ class DefenseContractsHandler:
 
     def __init__(self):
         """Initialize Defense Contracts handler"""
+        # Use RSS feed as primary source (more reliable than HTML scraping)
+        self.rss_url = "https://www.defense.gov/DesktopModules/ArticleCS/RSS.ashx?ContentType=400&Site=945&max=30"
         self.base_url = "https://www.defense.gov/News/Contracts/"
         self.article_base = "https://www.defense.gov"
 
+        # War.gov is an alias that sometimes works better
+        self.war_gov_base = "https://www.war.gov"
+
         # Rotating user agents to avoid blocking
         self.user_agents = [
-            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
-            'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
-            'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:122.0) Gecko/20100101 Firefox/122.0',
-            'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2 Safari/605.1.15',
-            'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+            'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:123.0) Gecko/20100101 Firefox/123.0',
+            'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.3 Safari/605.1.15',
+            'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
         ]
 
         # Configure requests session
@@ -63,11 +68,15 @@ class DefenseContractsHandler:
             'Accept-Language': 'en-US,en;q=0.9',
             'Accept-Encoding': 'gzip, deflate, br',
             'Connection': 'keep-alive',
-            'Cache-Control': 'no-cache',
-            'Pragma': 'no-cache',
+            'Cache-Control': 'max-age=0',
+            'DNT': '1',
+            'Referer': 'https://www.google.com/',
+            'Sec-Ch-Ua': '"Chromium";v="122", "Not(A:Brand";v="24", "Google Chrome";v="122"',
+            'Sec-Ch-Ua-Mobile': '?0',
+            'Sec-Ch-Ua-Platform': '"macOS"',
             'Sec-Fetch-Dest': 'document',
             'Sec-Fetch-Mode': 'navigate',
-            'Sec-Fetch-Site': 'none',
+            'Sec-Fetch-Site': 'cross-site',
             'Sec-Fetch-User': '?1',
             'Upgrade-Insecure-Requests': '1'
         })
@@ -136,7 +145,11 @@ class DefenseContractsHandler:
 
             for link_info in contract_links:
                 try:
-                    contracts = self._fetch_contracts_from_page(link_info['href'], link_info['date'])
+                    contracts = self._fetch_contracts_from_page(
+                        link_info['href'],
+                        link_info['date'],
+                        link_info.get('war_gov_href')
+                    )
 
                     if aviation_only:
                         contracts = [c for c in contracts if self._is_aviation_related(c)]
@@ -157,7 +170,95 @@ class DefenseContractsHandler:
 
     def _get_contract_page_links(self, days_back: int) -> List[Dict[str, str]]:
         """
-        Get links to individual contract pages from the contracts listing
+        Get links to individual contract pages from the RSS feed (more reliable than HTML scraping)
+
+        Args:
+            days_back: Number of days back to include
+
+        Returns:
+            List of dicts with 'href' and 'date' keys
+        """
+        try:
+            # Try RSS feed first (most reliable)
+            links = self._get_links_from_rss(days_back)
+            if links:
+                logger.info(f"Got {len(links)} contract links from RSS feed")
+                return links
+
+            # Fallback to HTML scraping if RSS fails
+            logger.warning("RSS feed failed, falling back to HTML scraping")
+            return self._get_links_from_html(days_back)
+
+        except Exception as e:
+            logger.error(f"Error getting contract page links: {e}")
+            return []
+
+    def _get_links_from_rss(self, days_back: int) -> List[Dict[str, str]]:
+        """
+        Get contract links from RSS feed
+
+        Args:
+            days_back: Number of days back to include
+
+        Returns:
+            List of dicts with 'href' and 'date' keys
+        """
+        import xml.etree.ElementTree as ET
+
+        try:
+            response = self._make_request(self.rss_url)
+            if not response:
+                logger.error("Failed to fetch RSS feed")
+                return []
+
+            # Parse XML
+            root = ET.fromstring(response.text)
+
+            links = []
+            cutoff_date = datetime.now() - timedelta(days=days_back)
+
+            # Find all items in the RSS feed
+            for item in root.findall('.//item'):
+                title = item.find('title')
+                link = item.find('link')
+                pub_date = item.find('pubDate')
+
+                if title is not None and link is not None:
+                    title_text = title.text.strip() if title.text else ''
+                    link_url = link.text.strip() if link.text else ''
+
+                    if 'Contracts for' in title_text:
+                        # Extract date from title
+                        date_str = self._extract_date_from_text(title_text)
+
+                        if date_str:
+                            contract_date = self._parse_contract_date(date_str)
+
+                            if contract_date and contract_date >= cutoff_date:
+                                # Convert war.gov URLs to defense.gov URLs (try both)
+                                href = link_url.replace('www.war.gov', 'www.defense.gov')
+                                links.append({
+                                    'href': href,
+                                    'war_gov_href': link_url,  # Keep original as backup
+                                    'date': date_str,
+                                    'parsed_date': contract_date
+                                })
+
+            # Sort by date (newest first)
+            links.sort(key=lambda x: x.get('parsed_date', datetime.min), reverse=True)
+
+            return links
+
+        except ET.ParseError as e:
+            logger.error(f"Failed to parse RSS XML: {e}")
+            return []
+        except Exception as e:
+            logger.error(f"Error fetching RSS feed: {e}")
+            return []
+
+    def _get_links_from_html(self, days_back: int) -> List[Dict[str, str]]:
+        """
+        Fallback: Get contract links from HTML page
 
         Args:
             days_back: Number of days back to include
@@ -202,22 +303,35 @@ class DefenseContractsHandler:
             return links
 
         except Exception as e:
-            logger.error(f"Error getting contract page links: {e}")
+            logger.error(f"Error getting contract page links from HTML: {e}")
             return []
 
-    def _fetch_contracts_from_page(self, url: str, date_str: str) -> List[Dict[str, Any]]:
+    def _fetch_contracts_from_page(self, url: str, date_str: str, war_gov_url: str = None) -> List[Dict[str, Any]]:
         """
         Fetch individual contracts from a contract page
 
         Args:
-            url: URL of the contracts page
+            url: URL of the contracts page (defense.gov)
             date_str: Date string for this contracts page
+            war_gov_url: Alternative war.gov URL
 
         Returns:
             List of contract dictionaries
         """
         try:
+            # Try defense.gov first
             response = self._make_request(url)
+
+            # If that fails, try war.gov
+            if not response and war_gov_url:
+                logger.info(f"Trying war.gov URL: {war_gov_url}")
+                response = self._make_request(war_gov_url)
+
+            # If both fail, try with a different referer
+            if not response:
+                self.session.headers['Referer'] = 'https://www.defense.gov/News/Contracts/'
+                response = self._make_request(url)
+
             if not response:
                 logger.error(f"Failed to fetch contract page: {url}")
                 return []
@@ -583,21 +697,46 @@ class DefenseContractsHandler:
 
     def test_connection(self) -> Dict[str, Any]:
         """
-        Test connection to defense.gov
+        Test connection to defense.gov (tries RSS feed first, then HTML page)
 
         Returns:
             Test result dictionary
         """
+        import xml.etree.ElementTree as ET
+
+        # First try RSS feed (most reliable)
+        try:
+            response = self._make_request(self.rss_url)
+
+            if response and response.status_code == 200:
+                try:
+                    root = ET.fromstring(response.text)
+                    items = root.findall('.//item')
+                    if items:
+                        return {
+                            'success': True,
+                            'status_code': response.status_code,
+                            'message': f'Successfully connected to defense.gov RSS feed ({len(items)} contract pages found)',
+                            'source': 'rss_feed',
+                            'contract_pages': len(items)
+                        }
+                except ET.ParseError:
+                    pass
+
+        except Exception as e:
+            logger.warning(f"RSS feed test failed: {e}")
+
+        # Fallback to HTML page
         try:
             response = self._make_request(self.base_url)
 
             if response and response.status_code == 200:
-                # Check if we got the contracts page
                 if 'Contracts' in response.text:
                     return {
                         'success': True,
                         'status_code': response.status_code,
-                        'message': 'Successfully connected to defense.gov contracts page'
+                        'message': 'Successfully connected to defense.gov contracts page',
+                        'source': 'html_page'
                     }
                 else:
                     return {
@@ -609,7 +748,7 @@ class DefenseContractsHandler:
                 return {
                     'success': False,
                     'status_code': response.status_code if response else None,
-                    'message': 'Failed to connect after retries (403 Forbidden likely)'
+                    'message': 'Failed to connect after retries (403 Forbidden likely). RSS feed may still work for listing.'
                 }
 
         except Exception as e:
