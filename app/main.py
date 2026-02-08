@@ -3742,6 +3742,53 @@ def get_credit_score_history(code):
         }), 500
 
 
+@app.route('/api/deal-evaluator-overrides', methods=['POST'])
+@require_api_key
+def log_deal_evaluator_override():
+    """
+    Log when user overrides hurdle rate from credit score default.
+    Used for model validation and analytics.
+
+    Body:
+        - airline_code: str
+        - suggested_hurdle_rate: float
+        - user_override_rate: float
+        - credit_score_at_time: float
+        - letter_grade_at_time: str
+        - deal_params: Dict (optional)
+    """
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({
+                'success': False,
+                'error': 'No data provided'
+            }), 400
+
+        if db_service:
+            doc_id = db_service.log_hurdle_override(data)
+            logger.info(f"📊 Logged hurdle override: {data.get('airline_code')} "
+                       f"{data.get('suggested_hurdle_rate')} → {data.get('user_override_rate')}")
+        else:
+            doc_id = None
+            logger.warning("⚠️ Database service not available for override logging")
+
+        return jsonify({
+            'success': True,
+            'message': 'Override logged',
+            'doc_id': doc_id,
+            'timestamp': datetime.now().isoformat()
+        })
+
+    except Exception as e:
+        logger.error(f"❌ Error logging deal evaluator override: {e}")
+        return jsonify({
+            'success': False,
+            'error': str(e),
+            'timestamp': datetime.now().isoformat()
+        }), 500
+
+
 @app.route('/api/credit-scores/seed-ratings', methods=['POST'])
 @require_api_key
 def seed_credit_ratings():

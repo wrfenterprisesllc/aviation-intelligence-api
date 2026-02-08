@@ -1972,6 +1972,40 @@ class DatabaseService:
             self.logger.error(f"Error saving credit score weights: {e}")
             return False
 
+    # ========== DEAL EVALUATOR OVERRIDES ==========
+
+    def log_hurdle_override(self, override_data: Dict[str, Any]) -> Optional[str]:
+        """
+        Log when a user overrides the suggested hurdle rate from credit score.
+        Used for model validation and analytics.
+
+        Args:
+            override_data: Dictionary containing:
+                - airline_code: str
+                - suggested_hurdle_rate: float
+                - user_override_rate: float
+                - credit_score_at_time: float
+                - letter_grade_at_time: str
+                - deal_params: Dict (aircraft_type, lease_term, etc.)
+
+        Returns:
+            Document ID if successful, None otherwise
+        """
+        try:
+            # Add timestamp
+            override_data['logged_at'] = datetime.now()
+
+            doc_ref = self.db.collection('deal_evaluator_overrides').document()
+            doc_ref.set(override_data)
+
+            self.logger.info(f"📊 Logged hurdle override for {override_data.get('airline_code')}: "
+                           f"{override_data.get('suggested_hurdle_rate')} → {override_data.get('user_override_rate')}")
+            return doc_ref.id
+
+        except Exception as e:
+            self.logger.error(f"Error logging hurdle override: {e}")
+            return None
+
     # ========== HEALTH CHECK ==========
 
     def health_check(self) -> Dict[str, Any]:
