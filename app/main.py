@@ -92,6 +92,20 @@ except Exception as e:
     bts_service = None
     financial_service = None
 
+# Deal Evaluator Service
+try:
+    from app.services.deal_evaluator_service import DealEvaluatorService
+    deal_evaluator_service = DealEvaluatorService(
+        db_service=db_service,
+        fred_service=fred_service,
+        financial_service=financial_service,
+        gemini_service=gemini_service
+    )
+    logger.info("✅ Deal Evaluator service initialized")
+except Exception as e:
+    logger.warning(f"⚠️ Deal Evaluator service initialization failed: {e}")
+    deal_evaluator_service = None
+
 @app.before_request
 def before_request():
     """Record request start time for monitoring"""
@@ -2738,6 +2752,497 @@ def test_defense_contracts_connection():
 
     result = defense_contracts_handler.test_connection()
     return jsonify(result)
+
+
+# ========== DEAL EVALUATOR ENDPOINTS ==========
+
+@app.route('/api/deals/aircraft-types', methods=['GET'])
+def get_aircraft_types():
+    """
+    Get list of supported aircraft types with valuation data.
+    Fetches from database if available, otherwise uses defaults.
+    """
+    start_time = datetime.now()
+
+    try:
+        if deal_evaluator_service:
+            aircraft_types = deal_evaluator_service.get_aircraft_types_list()
+        else:
+            # Fallback to default data
+            from app.services.deal_evaluator_service import DEFAULT_AIRCRAFT_DATA
+            aircraft_types = [
+                {
+                    'type': aircraft_type,
+                    'residual_base': data['residual_base'],
+                    'half_life': data['half_life'],
+                    'new_price': data['new_price']
+                }
+                for aircraft_type, data in DEFAULT_AIRCRAFT_DATA.items()
+            ]
+
+        response_time = (datetime.now() - start_time).total_seconds() * 1000
+
+        return jsonify({
+            'success': True,
+            'aircraft_types': aircraft_types,
+            'count': len(aircraft_types),
+            'data_source': 'database' if deal_evaluator_service and deal_evaluator_service.db_service else 'defaults',
+            'timestamp': datetime.now().isoformat(),
+            'response_time_ms': round(response_time, 1)
+        })
+
+    except Exception as e:
+        logger.error(f"❌ Error fetching aircraft types: {e}")
+        return jsonify({
+            'success': False,
+            'error': str(e),
+            'timestamp': datetime.now().isoformat()
+        }), 500
+
+
+@app.route('/api/deals/credit-tiers', methods=['GET'])
+def get_credit_tiers():
+    """
+    Get credit tiers with LIVE FRED-adjusted hurdle rates.
+    Hurdle rates are calculated from current Treasury yields and market spreads.
+    """
+    start_time = datetime.now()
+
+    try:
+        if deal_evaluator_service:
+            credit_tiers = deal_evaluator_service.get_credit_tiers_with_hurdles()
+        else:
+            # Fallback to static tiers
+            from app.services.deal_evaluator_service import TIER_SPREADS
+            credit_tiers = [
+                {
+                    'tier': tier_name,
+                    'label': tier_info['label'],
+                    'color': tier_info['color'],
+                    'spread_bps': tier_info['spread_bps'],
+                    'hurdle_rate': 4.5 + tier_info['spread_bps'] / 100,  # Fallback calculation
+                    'data_source': 'fallback'
+                }
+                for tier_name, tier_info in TIER_SPREADS.items()
+            ]
+
+        response_time = (datetime.now() - start_time).total_seconds() * 1000
+
+        return jsonify({
+            'success': True,
+            'credit_tiers': credit_tiers,
+            'count': len(credit_tiers),
+            'timestamp': datetime.now().isoformat(),
+            'response_time_ms': round(response_time, 1)
+        })
+
+    except Exception as e:
+        logger.error(f"❌ Error fetching credit tiers: {e}")
+        return jsonify({
+            'success': False,
+            'error': str(e),
+            'timestamp': datetime.now().isoformat()
+        }), 500
+
+
+@app.route('/api/deals/lessee-profile/<name>', methods=['GET'])
+def get_lessee_profile(name):
+    """
+    Auto-detect lessee credit tier from airline financials.
+    Uses Yahoo Finance to fetch balance sheet data and estimate credit rating.
+
+    Args:
+        name: Airline name (URL-encoded, e.g., "United%20Airlines")
+    """
+    start_time = datetime.now()
+
+    try:
+        if not deal_evaluator_service:
+            return jsonify({
+                'success': False,
+                'error': 'Deal evaluator service not available'
+            }), 503
+
+        result = deal_evaluator_service.auto_detect_credit_tier(name)
+
+        response_time = (datetime.now() - start_time).total_seconds() * 1000
+
+        return jsonify({
+            'success': result.get('tier') is not None,
+            'lessee_name': name,
+            'profile': result,
+            'timestamp': datetime.now().isoformat(),
+            'response_time_ms': round(response_time, 1)
+        })
+
+    except Exception as e:
+        logger.error(f"❌ Error fetching lessee profile for {name}: {e}")
+        return jsonify({
+            'success': False,
+            'error': str(e),
+            'timestamp': datetime.now().isoformat()
+        }), 500
+
+
+@app.route('/api/deals/evaluate', methods=['POST'])
+@require_api_key
+def evaluate_deal():
+    """
+    Evaluate a deal - calculate IRR, NPV, verdict, sensitivity.
+
+    Request body:
+    {
+        "aircraft_type": "A320neo",
+        "current_age": 3.5,
+        "lease_term": 8,
+        "monthly_rent": 320000,
+        "step_up_pct": 2.0,
+        "maintenance_reserve": 35000,
+        "transition_cost": 500000,
+        "purchase_price": 45000000,
+        "residual_value": null,  // Optional, auto-calculated if not provided
+        "credit_tier": "BBB/BBB-",
+        "lessee_name": "United Airlines",
+        "include_ai_commentary": true
+    }
+    """
+    start_time = datetime.now()
+
+    try:
+        if not deal_evaluator_service:
+            return jsonify({
+                'success': False,
+                'error': 'Deal evaluator service not available'
+            }), 503
+
+        data = request.get_json()
+        if not data:
+            return jsonify({
+                'success': False,
+                'error': 'Request body required'
+            }), 400
+
+        # Validate required fields
+        required_fields = ['aircraft_type', 'current_age', 'lease_term', 'monthly_rent', 'purchase_price', 'credit_tier']
+        for field in required_fields:
+            if field not in data:
+                return jsonify({
+                    'success': False,
+                    'error': f'Missing required field: {field}'
+                }), 400
+
+        # Build params dict
+        params = {
+            'aircraft_type': data['aircraft_type'],
+            'current_age': float(data['current_age']),
+            'lease_term': int(data['lease_term']),
+            'monthly_rent': float(data['monthly_rent']),
+            'step_up_pct': float(data.get('step_up_pct', 0)),
+            'maintenance_reserve': float(data.get('maintenance_reserve', 0)),
+            'transition_cost': float(data.get('transition_cost', 0)),
+            'purchase_price': float(data['purchase_price']),
+            'credit_tier': data['credit_tier'],
+            'lessee_name': data.get('lessee_name', 'Unknown')
+        }
+
+        # Add residual if provided
+        if data.get('residual_value'):
+            params['residual_value'] = float(data['residual_value'])
+
+        # Evaluate the deal
+        logger.info(f"📊 Evaluating deal: {params['aircraft_type']} for {params['lessee_name']}")
+        results = deal_evaluator_service.evaluate_deal(params)
+
+        # Generate AI commentary if requested
+        if data.get('include_ai_commentary', False):
+            commentary = deal_evaluator_service.generate_deal_commentary(params, results)
+            results['ai_commentary'] = commentary
+
+        # Save to database if requested
+        if data.get('save', False) and db_service:
+            evaluation_data = {
+                'mode': 'evaluate',
+                'params': params,
+                'results': {k: v for k, v in results.items() if k != 'sensitivity_matrix'},  # Exclude large matrix
+                'ai_commentary': results.get('ai_commentary')
+            }
+            results['evaluation_id'] = db_service.save_deal_evaluation(evaluation_data)
+
+        response_time = (datetime.now() - start_time).total_seconds() * 1000
+
+        return jsonify({
+            'success': True,
+            'mode': 'evaluate',
+            'results': results,
+            'timestamp': datetime.now().isoformat(),
+            'response_time_ms': round(response_time, 1)
+        })
+
+    except ValueError as e:
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 400
+    except Exception as e:
+        logger.error(f"❌ Deal evaluation failed: {e}", exc_info=True)
+        return jsonify({
+            'success': False,
+            'error': str(e),
+            'timestamp': datetime.now().isoformat()
+        }), 500
+
+
+@app.route('/api/deals/price', methods=['POST'])
+@require_api_key
+def price_deal():
+    """
+    Price a deal - solve for max purchase price given target IRR.
+
+    Request body:
+    {
+        "aircraft_type": "A320neo",
+        "current_age": 3.5,
+        "lease_term": 8,
+        "monthly_rent": 320000,
+        "step_up_pct": 2.0,
+        "maintenance_reserve": 35000,
+        "transition_cost": 500000,
+        "target_irr": 8.5,  // As percentage
+        "residual_value": null,  // Optional, auto-calculated if not provided
+        "credit_tier": "BBB/BBB-",
+        "lessee_name": "United Airlines",
+        "include_ai_commentary": true
+    }
+    """
+    start_time = datetime.now()
+
+    try:
+        if not deal_evaluator_service:
+            return jsonify({
+                'success': False,
+                'error': 'Deal evaluator service not available'
+            }), 503
+
+        data = request.get_json()
+        if not data:
+            return jsonify({
+                'success': False,
+                'error': 'Request body required'
+            }), 400
+
+        # Validate required fields
+        required_fields = ['aircraft_type', 'current_age', 'lease_term', 'monthly_rent', 'target_irr', 'credit_tier']
+        for field in required_fields:
+            if field not in data:
+                return jsonify({
+                    'success': False,
+                    'error': f'Missing required field: {field}'
+                }), 400
+
+        # Build params dict
+        params = {
+            'aircraft_type': data['aircraft_type'],
+            'current_age': float(data['current_age']),
+            'lease_term': int(data['lease_term']),
+            'monthly_rent': float(data['monthly_rent']),
+            'step_up_pct': float(data.get('step_up_pct', 0)),
+            'maintenance_reserve': float(data.get('maintenance_reserve', 0)),
+            'transition_cost': float(data.get('transition_cost', 0)),
+            'target_irr': float(data['target_irr']),
+            'credit_tier': data['credit_tier'],
+            'lessee_name': data.get('lessee_name', 'Unknown')
+        }
+
+        # Add residual if provided
+        if data.get('residual_value'):
+            params['residual_value'] = float(data['residual_value'])
+
+        # Price the deal
+        logger.info(f"💰 Pricing deal: {params['aircraft_type']} for {params['lessee_name']} @ {params['target_irr']}% IRR")
+        results = deal_evaluator_service.price_deal(params)
+
+        # Generate AI commentary if requested
+        if data.get('include_ai_commentary', False):
+            commentary = deal_evaluator_service.generate_deal_commentary(params, results)
+            results['ai_commentary'] = commentary
+
+        # Save to database if requested
+        if data.get('save', False) and db_service:
+            evaluation_data = {
+                'mode': 'price',
+                'params': params,
+                'results': {k: v for k, v in results.items() if k != 'sensitivity_matrix'},
+                'ai_commentary': results.get('ai_commentary')
+            }
+            results['evaluation_id'] = db_service.save_deal_evaluation(evaluation_data)
+
+        response_time = (datetime.now() - start_time).total_seconds() * 1000
+
+        return jsonify({
+            'success': True,
+            'mode': 'price',
+            'results': results,
+            'timestamp': datetime.now().isoformat(),
+            'response_time_ms': round(response_time, 1)
+        })
+
+    except ValueError as e:
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 400
+    except Exception as e:
+        logger.error(f"❌ Deal pricing failed: {e}", exc_info=True)
+        return jsonify({
+            'success': False,
+            'error': str(e),
+            'timestamp': datetime.now().isoformat()
+        }), 500
+
+
+@app.route('/api/deals/history', methods=['GET'])
+def get_deal_history():
+    """
+    Get recent saved deal evaluations.
+
+    Query params:
+        - aircraft_type: Filter by aircraft type
+        - lessee_name: Filter by lessee name
+        - mode: Filter by mode ('evaluate' or 'price')
+        - limit: Max results (default 50)
+    """
+    start_time = datetime.now()
+
+    try:
+        if not db_service:
+            return jsonify({
+                'success': False,
+                'error': 'Database service not available'
+            }), 503
+
+        # Get query params
+        aircraft_type = request.args.get('aircraft_type')
+        lessee_name = request.args.get('lessee_name')
+        mode = request.args.get('mode')
+        limit = int(request.args.get('limit', 50))
+
+        evaluations = db_service.get_deal_evaluations(
+            aircraft_type=aircraft_type,
+            lessee_name=lessee_name,
+            mode=mode,
+            limit=limit
+        )
+
+        response_time = (datetime.now() - start_time).total_seconds() * 1000
+
+        return jsonify({
+            'success': True,
+            'evaluations': evaluations,
+            'count': len(evaluations),
+            'filters': {
+                'aircraft_type': aircraft_type,
+                'lessee_name': lessee_name,
+                'mode': mode
+            },
+            'timestamp': datetime.now().isoformat(),
+            'response_time_ms': round(response_time, 1)
+        })
+
+    except Exception as e:
+        logger.error(f"❌ Error fetching deal history: {e}")
+        return jsonify({
+            'success': False,
+            'error': str(e),
+            'timestamp': datetime.now().isoformat()
+        }), 500
+
+
+@app.route('/api/deals/seed-defaults', methods=['POST'])
+@require_api_key
+def seed_aircraft_defaults():
+    """
+    Admin endpoint: Seed aircraft defaults to database.
+    Run once to populate the aircraft_defaults collection.
+    """
+    start_time = datetime.now()
+
+    try:
+        if not db_service:
+            return jsonify({
+                'success': False,
+                'error': 'Database service not available'
+            }), 503
+
+        # Get default aircraft data
+        from app.services.deal_evaluator_service import DEFAULT_AIRCRAFT_DATA
+
+        result = db_service.seed_aircraft_defaults(DEFAULT_AIRCRAFT_DATA)
+
+        response_time = (datetime.now() - start_time).total_seconds() * 1000
+
+        return jsonify({
+            'success': result.get('success', False),
+            'result': result,
+            'timestamp': datetime.now().isoformat(),
+            'response_time_ms': round(response_time, 1)
+        })
+
+    except Exception as e:
+        logger.error(f"❌ Error seeding aircraft defaults: {e}")
+        return jsonify({
+            'success': False,
+            'error': str(e),
+            'timestamp': datetime.now().isoformat()
+        }), 500
+
+
+@app.route('/api/deals/save', methods=['POST'])
+@require_api_key
+def save_deal_evaluation():
+    """
+    Save a deal evaluation to history.
+
+    Request body should contain the full evaluation data including params and results.
+    """
+    start_time = datetime.now()
+
+    try:
+        if not db_service:
+            return jsonify({
+                'success': False,
+                'error': 'Database service not available'
+            }), 503
+
+        data = request.get_json()
+        if not data:
+            return jsonify({
+                'success': False,
+                'error': 'Request body required'
+            }), 400
+
+        evaluation_id = db_service.save_deal_evaluation(data)
+
+        if evaluation_id:
+            response_time = (datetime.now() - start_time).total_seconds() * 1000
+            return jsonify({
+                'success': True,
+                'evaluation_id': evaluation_id,
+                'timestamp': datetime.now().isoformat(),
+                'response_time_ms': round(response_time, 1)
+            })
+        else:
+            return jsonify({
+                'success': False,
+                'error': 'Failed to save evaluation'
+            }), 500
+
+    except Exception as e:
+        logger.error(f"❌ Error saving deal evaluation: {e}")
+        return jsonify({
+            'success': False,
+            'error': str(e),
+            'timestamp': datetime.now().isoformat()
+        }), 500
 
 
 if __name__ == '__main__':

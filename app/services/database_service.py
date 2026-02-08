@@ -1373,6 +1373,227 @@ class DatabaseService:
                 'error': str(e)
             }
 
+    # ========== AIRCRAFT DEFAULTS ==========
+
+    def get_aircraft_defaults(self) -> Optional[Dict[str, Any]]:
+        """
+        Fetch aircraft valuation defaults from 'aircraft_defaults' collection.
+
+        Returns:
+            Dictionary keyed by aircraft type with residual_base, half_life, new_price
+            Returns None if collection is empty or on error
+        """
+        try:
+            docs = self.db.collection('aircraft_defaults').stream()
+            aircraft_data = {}
+
+            for doc in docs:
+                data = doc.to_dict()
+                aircraft_data[doc.id] = {
+                    'residual_base': data.get('residual_base', 0),
+                    'half_life': data.get('half_life', 12),
+                    'new_price': data.get('new_price', 0),
+                    'last_updated': data.get('last_updated'),
+                    'source': data.get('source', 'database')
+                }
+
+            if aircraft_data:
+                self.logger.info(f"📊 Retrieved {len(aircraft_data)} aircraft defaults from database")
+                return aircraft_data
+
+            return None
+
+        except Exception as e:
+            self.logger.error(f"Error fetching aircraft defaults: {e}")
+            return None
+
+    def update_aircraft_default(self, aircraft_type: str, data: Dict[str, Any]) -> bool:
+        """
+        Update a single aircraft's default values.
+
+        Args:
+            aircraft_type: Aircraft type (e.g., "A320neo")
+            data: Dictionary with residual_base, half_life, new_price
+
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            data['last_updated'] = datetime.now()
+            doc_ref = self.db.collection('aircraft_defaults').document(aircraft_type)
+            doc_ref.set(data, merge=True)
+            self.logger.info(f"✅ Updated aircraft default: {aircraft_type}")
+            return True
+
+        except Exception as e:
+            self.logger.error(f"Error updating aircraft default {aircraft_type}: {e}")
+            return False
+
+    def seed_aircraft_defaults(self, aircraft_data: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
+        """
+        Seed initial aircraft defaults to database.
+
+        Args:
+            aircraft_data: Dictionary of aircraft types and their data
+
+        Returns:
+            Summary of seeding operation
+        """
+        try:
+            success_count = 0
+            error_count = 0
+
+            for aircraft_type, data in aircraft_data.items():
+                try:
+                    data['last_updated'] = datetime.now()
+                    data['source'] = 'seed'
+                    doc_ref = self.db.collection('aircraft_defaults').document(aircraft_type)
+                    doc_ref.set(data)
+                    success_count += 1
+                except Exception as e:
+                    self.logger.error(f"Error seeding {aircraft_type}: {e}")
+                    error_count += 1
+
+            self.logger.info(f"✅ Seeded {success_count} aircraft defaults ({error_count} errors)")
+            return {
+                'success': True,
+                'seeded': success_count,
+                'errors': error_count,
+                'total': len(aircraft_data)
+            }
+
+        except Exception as e:
+            self.logger.error(f"Error seeding aircraft defaults: {e}")
+            return {
+                'success': False,
+                'error': str(e)
+            }
+
+    # ========== DEAL EVALUATIONS ==========
+
+    def save_deal_evaluation(self, evaluation_data: Dict[str, Any]) -> Optional[str]:
+        """
+        Save deal evaluation to Firestore.
+
+        Args:
+            evaluation_data: Dictionary containing:
+                - mode: str ('evaluate' or 'price')
+                - aircraft_type: str
+                - current_age: float
+                - lease_term: int
+                - monthly_rent: float
+                - purchase_price: float (for evaluate mode)
+                - target_irr: float (for price mode)
+                - lessee_name: str
+                - credit_tier: str
+                - results: Dict (irr, npv, verdict, etc.)
+                - ai_commentary: Optional[str]
+
+        Returns:
+            Document ID if successful, None otherwise
+        """
+        try:
+            # Add timestamp if not present
+            if 'evaluated_at' not in evaluation_data:
+                evaluation_data['evaluated_at'] = datetime.now()
+
+            # Auto-generate ID
+            doc_ref = self.db.collection('deal_evaluations').document()
+            doc_ref.set(evaluation_data)
+
+            self.logger.info(f"✅ Saved deal evaluation: {doc_ref.id}")
+            return doc_ref.id
+
+        except Exception as e:
+            self.logger.error(f"Error saving deal evaluation: {e}")
+            return None
+
+    def get_deal_evaluation(self, evaluation_id: str) -> Optional[Dict[str, Any]]:
+        """
+        Get a specific deal evaluation by ID.
+
+        Args:
+            evaluation_id: Firestore document ID
+
+        Returns:
+            Evaluation data dict with 'id' field, or None if not found
+        """
+        try:
+            doc_ref = self.db.collection('deal_evaluations').document(evaluation_id)
+            doc = doc_ref.get()
+
+            if doc.exists:
+                data = doc.to_dict()
+                data['id'] = doc.id
+
+                # Convert Firestore timestamps
+                if 'evaluated_at' in data and hasattr(data['evaluated_at'], 'replace'):
+                    data['evaluated_at'] = data['evaluated_at'].replace(tzinfo=None)
+
+                return data
+
+            self.logger.warning(f"Deal evaluation not found: {evaluation_id}")
+            return None
+
+        except Exception as e:
+            self.logger.error(f"Error fetching deal evaluation: {e}")
+            return None
+
+    def get_deal_evaluations(
+        self,
+        aircraft_type: Optional[str] = None,
+        lessee_name: Optional[str] = None,
+        mode: Optional[str] = None,
+        limit: int = 50
+    ) -> List[Dict[str, Any]]:
+        """
+        Query deal evaluations with optional filters.
+
+        Args:
+            aircraft_type: Filter by aircraft type
+            lessee_name: Filter by lessee name
+            mode: Filter by mode ('evaluate' or 'price')
+            limit: Maximum number of results
+
+        Returns:
+            List of evaluation dicts, ordered by evaluated_at DESC
+        """
+        try:
+            query = self.db.collection('deal_evaluations')
+
+            # Apply filters
+            if aircraft_type:
+                query = query.where(filter=FieldFilter('aircraft_type', '==', aircraft_type))
+            if lessee_name:
+                query = query.where(filter=FieldFilter('lessee_name', '==', lessee_name))
+            if mode:
+                query = query.where(filter=FieldFilter('mode', '==', mode))
+
+            # Order by most recent first and limit
+            query = query.order_by('evaluated_at', direction=firestore.Query.DESCENDING)
+            query = query.limit(limit)
+
+            # Execute query
+            docs = query.stream()
+            evaluations = []
+
+            for doc in docs:
+                data = doc.to_dict()
+                data['id'] = doc.id
+
+                # Convert Firestore timestamps
+                if 'evaluated_at' in data and hasattr(data['evaluated_at'], 'replace'):
+                    data['evaluated_at'] = data['evaluated_at'].replace(tzinfo=None).isoformat()
+
+                evaluations.append(data)
+
+            self.logger.info(f"📊 Retrieved {len(evaluations)} deal evaluations")
+            return evaluations
+
+        except Exception as e:
+            self.logger.error(f"Error querying deal evaluations: {e}")
+            return []
+
     # ========== HEALTH CHECK ==========
 
     def health_check(self) -> Dict[str, Any]:
