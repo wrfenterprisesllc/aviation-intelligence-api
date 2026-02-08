@@ -1596,6 +1596,25 @@ class DatabaseService:
 
     # ========== AIRLINE CREDIT SCORES ==========
 
+    def _serialize_for_firestore(self, data: Any) -> Any:
+        """
+        Recursively serialize data for Firestore compatibility.
+        Handles nested dicts, lists, and converts problematic types.
+        """
+        if data is None:
+            return None
+        elif isinstance(data, dict):
+            return {k: self._serialize_for_firestore(v) for k, v in data.items()}
+        elif isinstance(data, list):
+            return [self._serialize_for_firestore(item) for item in data]
+        elif isinstance(data, datetime):
+            return data
+        elif isinstance(data, (int, float, str, bool)):
+            return data
+        else:
+            # Convert any other type to string
+            return str(data)
+
     def save_credit_score(self, score_data: Dict[str, Any]) -> Optional[str]:
         """
         Save airline credit score to Firestore.
@@ -1621,14 +1640,22 @@ class DatabaseService:
 
             doc_id = score_data['airline_code'].upper()
 
-            # Add timestamp if not present
-            if 'calculated_at' not in score_data:
-                score_data['calculated_at'] = datetime.now()
+            # Serialize data for Firestore compatibility
+            serialized_data = self._serialize_for_firestore(score_data)
+
+            # Add/convert timestamp
+            if 'calculated_at' not in serialized_data or not isinstance(serialized_data.get('calculated_at'), datetime):
+                serialized_data['calculated_at'] = datetime.now()
+
+            # Add updated_at timestamp
+            serialized_data['updated_at'] = datetime.now()
+
+            self.logger.info(f"📝 Attempting to save credit score for {doc_id} to collection 'airline_credit_scores'")
 
             doc_ref = self.db.collection('airline_credit_scores').document(doc_id)
-            doc_ref.set(score_data)
+            doc_ref.set(serialized_data)
 
-            self.logger.info(f"✅ Saved credit score for {doc_id}: {score_data.get('overall_score', 0):.1f} ({score_data.get('letter_grade', 'N/A')})")
+            self.logger.info(f"✅ Saved credit score for {doc_id}: {serialized_data.get('overall_score', 0):.1f} ({serialized_data.get('letter_grade', 'N/A')})")
             return doc_id
 
         except Exception as e:
