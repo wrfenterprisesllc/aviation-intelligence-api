@@ -90,7 +90,7 @@ class PDFService:
         ))
 
         self.styles.add(ParagraphStyle(
-            name='BodyText',
+            name='ReportBody',
             parent=self.styles['Normal'],
             fontSize=11,
             textColor=self.DARK_GRAY,
@@ -385,7 +385,7 @@ class PDFService:
                 if para.startswith('- ') or para.startswith('• '):
                     para = '• ' + para[2:]
 
-                elements.append(Paragraph(para, self.styles['BodyText']))
+                elements.append(Paragraph(para, self.styles['ReportBody']))
 
         elements.append(Spacer(1, 15))
 
@@ -521,7 +521,7 @@ class PDFService:
         # Create verdict table (acts as a box)
         verdict_data = [
             [Paragraph(verdict_text, text_style)],
-            [Paragraph(detail_text, self.styles['BodyText'])]
+            [Paragraph(detail_text, self.styles['ReportBody'])]
         ]
 
         verdict_table = Table(verdict_data, colWidths=[5*inch])
@@ -664,12 +664,12 @@ class PDFService:
         if mode == 'evaluate':
             elements.append(Paragraph(
                 "IRR by Residual Value and Discount Rate",
-                self.styles['BodyText']
+                self.styles['ReportBody']
             ))
         else:
             elements.append(Paragraph(
                 "Max Price by Residual Value and Target IRR",
-                self.styles['BodyText']
+                self.styles['ReportBody']
             ))
 
         elements.append(Spacer(1, 10))
@@ -680,7 +680,7 @@ class PDFService:
         if sensitivity_matrix:
             elements.append(self._build_sensitivity_table(sensitivity_matrix, mode))
         else:
-            elements.append(Paragraph("Sensitivity data not available", self.styles['BodyText']))
+            elements.append(Paragraph("Sensitivity data not available", self.styles['ReportBody']))
 
         elements.append(Spacer(1, 20))
 
