@@ -142,6 +142,49 @@ try:
 except Exception as e:
     logger.warning(f"⚠️ Credit Scoring service initialization failed: {e}")
     credit_score_service = None
+    xbrl_service = None
+    operational_service = None
+
+# Backtesting Services
+try:
+    from app.services.backtest_data_service import BacktestDataService
+    from app.services.backtest_runner import BacktestRunner
+    from app.services.backtest_optimizer import BacktestOptimizer
+    from app.services.backtest_validation import BacktestValidation
+    from app.services.backtest_report import BacktestReport
+
+    backtest_data_service = BacktestDataService(
+        xbrl_service=xbrl_service,
+        db_service=db_service
+    )
+    backtest_runner = BacktestRunner(
+        credit_score_service=credit_score_service,
+        backtest_data_service=backtest_data_service,
+        db_service=db_service
+    )
+    backtest_optimizer = BacktestOptimizer(
+        backtest_runner=backtest_runner,
+        db_service=db_service
+    )
+    backtest_validation = BacktestValidation(
+        backtest_runner=backtest_runner,
+        backtest_data_service=backtest_data_service,
+        db_service=db_service
+    )
+    backtest_report = BacktestReport(
+        backtest_runner=backtest_runner,
+        backtest_optimizer=backtest_optimizer,
+        backtest_validation=backtest_validation,
+        db_service=db_service
+    )
+    logger.info("✅ Backtesting services initialized")
+except Exception as e:
+    logger.warning(f"⚠️ Backtesting service initialization failed: {e}")
+    backtest_data_service = None
+    backtest_runner = None
+    backtest_optimizer = None
+    backtest_validation = None
+    backtest_report = None
 
 @app.before_request
 def before_request():
@@ -3922,6 +3965,413 @@ def seed_credit_ratings():
 
     except Exception as e:
         logger.error(f"❌ Error seeding credit ratings: {e}")
+        return jsonify({
+            'success': False,
+            'error': str(e),
+            'timestamp': datetime.now().isoformat()
+        }), 500
+
+
+# ========== BACKTESTING ENDPOINTS ==========
+
+@app.route('/api/credit-scores/backtest/collect-data', methods=['POST'])
+@require_api_key
+def collect_backtest_data():
+    """
+    Collect historical data for all 8 airlines.
+    Hits SEC EDGAR and yfinance - respect rate limits.
+
+    Returns: Summary of data collected per airline
+    """
+    start_time = datetime.now()
+
+    try:
+        if not backtest_data_service:
+            return jsonify({
+                'success': False,
+                'error': 'Backtest data service not available'
+            }), 503
+
+        start_year = request.json.get('start_year', 2015) if request.json else 2015
+
+        logger.info(f"📊 Starting backtest data collection from {start_year}...")
+        results = backtest_data_service.collect_all_historical_data(start_year=start_year)
+
+        response_time = (datetime.now() - start_time).total_seconds() * 1000
+
+        return jsonify({
+            'success': results.get('success', False),
+            'results': results,
+            'timestamp': datetime.now().isoformat(),
+            'response_time_ms': round(response_time, 1)
+        })
+
+    except Exception as e:
+        logger.error(f"❌ Error collecting backtest data: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+        return jsonify({
+            'success': False,
+            'error': str(e),
+            'timestamp': datetime.now().isoformat()
+        }), 500
+
+
+@app.route('/api/credit-scores/backtest/run', methods=['POST'])
+@require_api_key
+def run_backtest():
+    """
+    Run full backtest across all airlines and quarter ends.
+
+    Body (optional):
+        - weights: Dict with weight overrides
+        - start_year: Start year (default 2015)
+        - end_year: End year (default current year)
+
+    Returns: Full backtest results with summary metrics
+    """
+    start_time = datetime.now()
+
+    try:
+        if not backtest_runner:
+            return jsonify({
+                'success': False,
+                'error': 'Backtest runner service not available'
+            }), 503
+
+        data = request.get_json() or {}
+        weights = data.get('weights')
+        start_year = data.get('start_year', 2015)
+        end_year = data.get('end_year')
+
+        logger.info(f"📊 Running backtest {start_year}-{end_year or 'present'}...")
+        results = backtest_runner.run_full_backtest(
+            weights=weights,
+            start_year=start_year,
+            end_year=end_year
+        )
+
+        response_time = (datetime.now() - start_time).total_seconds() * 1000
+
+        return jsonify({
+            'success': True,
+            'run_id': results.get('run_id'),
+            'summary_metrics': results.get('summary_metrics'),
+            'airline_summaries': results.get('airline_summaries'),
+            'total_observations': results.get('total_observations'),
+            'weights_used': results.get('weights'),
+            'date_range': results.get('date_range'),
+            'timestamp': datetime.now().isoformat(),
+            'response_time_ms': round(response_time, 1)
+        })
+
+    except Exception as e:
+        logger.error(f"❌ Error running backtest: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+        return jsonify({
+            'success': False,
+            'error': str(e),
+            'timestamp': datetime.now().isoformat()
+        }), 500
+
+
+@app.route('/api/credit-scores/backtest/optimize', methods=['POST'])
+@require_api_key
+def optimize_weights():
+    """
+    Run weight optimization via grid search.
+    This is computationally intensive and may take 2-5 minutes.
+
+    Body (optional):
+        - start_year: Start year (default 2015)
+        - end_year: End year
+        - quick: Boolean - if True, use quick optimization (fewer samples, faster)
+
+    Returns: Optimal weights and all tested combinations
+    """
+    start_time = datetime.now()
+
+    try:
+        if not backtest_optimizer:
+            return jsonify({
+                'success': False,
+                'error': 'Backtest optimizer service not available'
+            }), 503
+
+        data = request.get_json() or {}
+        start_year = data.get('start_year', 2015)
+        end_year = data.get('end_year')
+        quick_mode = data.get('quick', False)
+
+        logger.info(f"📊 Running weight optimization (quick={quick_mode})...")
+
+        if quick_mode:
+            results = backtest_optimizer.quick_optimize(
+                start_year=max(2018, start_year),
+                end_year=end_year,
+                sample_size=data.get('sample_size', 15)
+            )
+        else:
+            results = backtest_optimizer.optimize_weights(
+                start_year=start_year,
+                end_year=end_year
+            )
+
+        response_time = (datetime.now() - start_time).total_seconds() * 1000
+
+        return jsonify({
+            'success': results.get('success', False),
+            'optimal_weights': results.get('optimal_weights'),
+            'optimal_score': results.get('optimal_score'),
+            'optimal_combined_score': results.get('optimal_combined_score'),
+            'top_5_configs': results.get('top_5_configs'),
+            'total_combinations_tested': results.get('total_combinations_tested') or results.get('combinations_tested'),
+            'runtime_seconds': results.get('runtime_seconds'),
+            'timestamp': datetime.now().isoformat(),
+            'response_time_ms': round(response_time, 1)
+        })
+
+    except Exception as e:
+        logger.error(f"❌ Error running weight optimization: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+        return jsonify({
+            'success': False,
+            'error': str(e),
+            'timestamp': datetime.now().isoformat()
+        }), 500
+
+
+@app.route('/api/credit-scores/backtest/validate', methods=['POST'])
+@require_api_key
+def run_validation():
+    """
+    Run validation suite with named test cases.
+
+    Body (optional):
+        - weights: Dict with weight overrides
+
+    Returns: Pass/fail report for all validation cases
+    """
+    start_time = datetime.now()
+
+    try:
+        if not backtest_validation:
+            return jsonify({
+                'success': False,
+                'error': 'Backtest validation service not available'
+            }), 503
+
+        data = request.get_json() or {}
+        weights = data.get('weights')
+
+        logger.info("📊 Running validation suite...")
+        results = backtest_validation.run_validation_suite(weights=weights)
+
+        response_time = (datetime.now() - start_time).total_seconds() * 1000
+
+        return jsonify({
+            'success': True,
+            'validation_id': results.get('validation_id'),
+            'total_cases': results.get('total_cases'),
+            'passed': results.get('passed'),
+            'failed': results.get('failed'),
+            'skipped': results.get('skipped'),
+            'pass_rate': results.get('pass_rate'),
+            'results': results.get('results'),
+            'weights_used': results.get('weights_used'),
+            'runtime_seconds': results.get('runtime_seconds'),
+            'timestamp': datetime.now().isoformat(),
+            'response_time_ms': round(response_time, 1)
+        })
+
+    except Exception as e:
+        logger.error(f"❌ Error running validation suite: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+        return jsonify({
+            'success': False,
+            'error': str(e),
+            'timestamp': datetime.now().isoformat()
+        }), 500
+
+
+@app.route('/api/credit-scores/backtest/report', methods=['GET'])
+@require_api_key
+def get_backtest_report():
+    """
+    Get the most recent comprehensive validation report.
+
+    Returns: Full validation report or 404 if none generated
+    """
+    start_time = datetime.now()
+
+    try:
+        if not backtest_report:
+            return jsonify({
+                'success': False,
+                'error': 'Backtest report service not available'
+            }), 503
+
+        report = backtest_report.get_latest_report()
+
+        if not report:
+            return jsonify({
+                'success': False,
+                'error': 'No validation report found. Generate one using POST /api/credit-scores/backtest/report'
+            }), 404
+
+        response_time = (datetime.now() - start_time).total_seconds() * 1000
+
+        return jsonify({
+            'success': True,
+            'report': report,
+            'timestamp': datetime.now().isoformat(),
+            'response_time_ms': round(response_time, 1)
+        })
+
+    except Exception as e:
+        logger.error(f"❌ Error fetching backtest report: {e}")
+        return jsonify({
+            'success': False,
+            'error': str(e),
+            'timestamp': datetime.now().isoformat()
+        }), 500
+
+
+@app.route('/api/credit-scores/backtest/report', methods=['POST'])
+@require_api_key
+def generate_backtest_report():
+    """
+    Generate new comprehensive validation report.
+    Runs backtest + optimization + validation + report generation.
+
+    Body (optional):
+        - start_year: Start year (default 2015)
+        - end_year: End year
+
+    Returns: Full validation report
+    """
+    start_time = datetime.now()
+
+    try:
+        if not backtest_report:
+            return jsonify({
+                'success': False,
+                'error': 'Backtest report service not available'
+            }), 503
+
+        data = request.get_json() or {}
+        start_year = data.get('start_year', 2015)
+        end_year = data.get('end_year')
+
+        logger.info(f"📊 Generating comprehensive validation report {start_year}-{end_year or 'present'}...")
+        report = backtest_report.generate_validation_report(
+            run_fresh=True,
+            start_year=start_year,
+            end_year=end_year
+        )
+
+        # Also get text summary
+        summary_text = backtest_report.get_report_summary(report)
+
+        response_time = (datetime.now() - start_time).total_seconds() * 1000
+
+        return jsonify({
+            'success': True,
+            'report_id': report.get('report_id'),
+            'executive_summary': report.get('executive_summary'),
+            'key_findings': report.get('key_findings'),
+            'validation_cases': report.get('validation_cases'),
+            'weight_calibration': report.get('weight_calibration'),
+            'airline_profiles': report.get('airline_profiles'),
+            'limitations': report.get('limitations'),
+            'full_results': report.get('full_results'),
+            'report_metadata': report.get('report_metadata'),
+            'summary_text': summary_text,
+            'timestamp': datetime.now().isoformat(),
+            'response_time_ms': round(response_time, 1)
+        })
+
+    except Exception as e:
+        logger.error(f"❌ Error generating backtest report: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+        return jsonify({
+            'success': False,
+            'error': str(e),
+            'timestamp': datetime.now().isoformat()
+        }), 500
+
+
+@app.route('/api/credit-scores/backtest/<code>', methods=['GET'])
+@require_api_key
+def get_historical_score(code):
+    """
+    Get historical score for a specific airline at a specific date.
+
+    Query params:
+        - as_of: Date string (YYYY-MM-DD) - required
+
+    Returns: Point-in-time historical score
+    """
+    start_time = datetime.now()
+
+    try:
+        if not backtest_runner:
+            return jsonify({
+                'success': False,
+                'error': 'Backtest runner service not available'
+            }), 503
+
+        as_of_date = request.args.get('as_of')
+        if not as_of_date:
+            return jsonify({
+                'success': False,
+                'error': 'Missing required parameter: as_of (YYYY-MM-DD)'
+            }), 400
+
+        logger.info(f"📊 Getting historical score for {code} at {as_of_date}...")
+        result = backtest_runner.run_single_backtest(
+            airline_code=code.upper(),
+            as_of_date=as_of_date
+        )
+
+        response_time = (datetime.now() - start_time).total_seconds() * 1000
+
+        if result.get('success'):
+            obs = result.get('observation', {})
+            return jsonify({
+                'success': True,
+                'airline_code': obs.get('airline_code'),
+                'airline_name': obs.get('airline_name'),
+                'as_of_date': obs.get('as_of_date'),
+                'composite_score': obs.get('composite_score'),
+                'letter_grade': obs.get('letter_grade'),
+                'dimension_scores': obs.get('dimension_scores'),
+                'actual_rating_at_time': obs.get('actual_rating_at_time'),
+                'actual_rating_moodys': obs.get('actual_rating_moodys'),
+                'actual_rating_numeric': obs.get('actual_rating_numeric'),
+                'is_investment_grade': obs.get('is_investment_grade'),
+                'hurdle_adjustment_bps': obs.get('hurdle_adjustment_bps'),
+                'had_credit_event_next_6m': obs.get('had_credit_event_next_6m'),
+                'had_credit_event_next_12m': obs.get('had_credit_event_next_12m'),
+                'weights_used': result.get('weights_used'),
+                'timestamp': datetime.now().isoformat(),
+                'response_time_ms': round(response_time, 1)
+            })
+        else:
+            return jsonify({
+                'success': False,
+                'error': result.get('error', 'Could not calculate historical score'),
+                'timestamp': datetime.now().isoformat()
+            }), 404
+
+    except Exception as e:
+        logger.error(f"❌ Error getting historical score for {code}: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
         return jsonify({
             'success': False,
             'error': str(e),

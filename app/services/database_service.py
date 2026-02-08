@@ -2006,6 +2006,211 @@ class DatabaseService:
             self.logger.error(f"Error logging hurdle override: {e}")
             return None
 
+    # ========== BACKTEST DATA ==========
+
+    def save_backtest_data(self, airline_code: str, data: Dict[str, Any]) -> Optional[str]:
+        """
+        Save historical backtest data for an airline.
+
+        Args:
+            airline_code: Airline ticker
+            data: Dictionary containing financial_snapshots, stock_momentum, rating_history
+
+        Returns:
+            Document ID if successful, None otherwise
+        """
+        try:
+            doc_id = airline_code.upper()
+
+            # Serialize for Firestore
+            serialized_data = self._serialize_for_firestore(data)
+            serialized_data['updated_at'] = datetime.now()
+
+            doc_ref = self.db.collection('backtest_data').document(doc_id)
+            doc_ref.set(serialized_data)
+
+            self.logger.info(f"✅ Saved backtest data for {doc_id}")
+            return doc_id
+
+        except Exception as e:
+            self.logger.error(f"Error saving backtest data for {airline_code}: {e}")
+            return None
+
+    def get_backtest_data(self, airline_code: str) -> Optional[Dict[str, Any]]:
+        """
+        Get historical backtest data for an airline.
+
+        Args:
+            airline_code: Airline ticker
+
+        Returns:
+            Backtest data dictionary or None if not found
+        """
+        try:
+            doc_ref = self.db.collection('backtest_data').document(airline_code.upper())
+            doc = doc_ref.get()
+
+            if doc.exists:
+                data = doc.to_dict()
+                data['id'] = doc.id
+                return data
+
+            return None
+
+        except Exception as e:
+            self.logger.error(f"Error fetching backtest data for {airline_code}: {e}")
+            return None
+
+    def get_all_backtest_data(self) -> List[Dict[str, Any]]:
+        """
+        Get backtest data for all airlines.
+
+        Returns:
+            List of backtest data dictionaries
+        """
+        try:
+            docs = self.db.collection('backtest_data').stream()
+            results = []
+
+            for doc in docs:
+                data = doc.to_dict()
+                data['id'] = doc.id
+                results.append(data)
+
+            return results
+
+        except Exception as e:
+            self.logger.error(f"Error fetching all backtest data: {e}")
+            return []
+
+    # ========== BACKTEST RUNS ==========
+
+    def save_backtest_run(self, run_data: Dict[str, Any]) -> Optional[str]:
+        """
+        Save a backtest run result (backtest, optimization, validation, or report).
+
+        Args:
+            run_data: Dictionary containing run results with run_id
+
+        Returns:
+            Document ID if successful, None otherwise
+        """
+        try:
+            run_id = run_data.get('run_id') or run_data.get('optimization_id') or \
+                     run_data.get('validation_id') or run_data.get('report_id') or \
+                     f"run_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+
+            # Serialize for Firestore
+            serialized_data = self._serialize_for_firestore(run_data)
+            serialized_data['saved_at'] = datetime.now()
+
+            doc_ref = self.db.collection('backtest_runs').document(run_id)
+            doc_ref.set(serialized_data)
+
+            self.logger.info(f"✅ Saved backtest run: {run_id}")
+            return run_id
+
+        except Exception as e:
+            self.logger.error(f"Error saving backtest run: {e}")
+            import traceback
+            self.logger.error(traceback.format_exc())
+            return None
+
+    def get_backtest_run(self, run_id: str) -> Optional[Dict[str, Any]]:
+        """
+        Get a specific backtest run by ID.
+
+        Args:
+            run_id: Run ID
+
+        Returns:
+            Run data dictionary or None if not found
+        """
+        try:
+            doc_ref = self.db.collection('backtest_runs').document(run_id)
+            doc = doc_ref.get()
+
+            if doc.exists:
+                data = doc.to_dict()
+                data['id'] = doc.id
+                return data
+
+            return None
+
+        except Exception as e:
+            self.logger.error(f"Error fetching backtest run {run_id}: {e}")
+            return None
+
+    def get_latest_backtest_run(self, run_type: str = None) -> Optional[Dict[str, Any]]:
+        """
+        Get the most recent backtest run, optionally filtered by type.
+
+        Args:
+            run_type: Optional filter ('full_backtest', 'optimization', 'validation', 'full_report')
+
+        Returns:
+            Run data dictionary or None if not found
+        """
+        try:
+            query = self.db.collection('backtest_runs')
+
+            if run_type:
+                query = query.where(filter=FieldFilter('run_type', '==', run_type))
+
+            query = query.order_by('saved_at', direction=firestore.Query.DESCENDING)
+            query = query.limit(1)
+
+            docs = list(query.stream())
+
+            if docs:
+                data = docs[0].to_dict()
+                data['id'] = docs[0].id
+                return data
+
+            return None
+
+        except Exception as e:
+            self.logger.error(f"Error fetching latest backtest run: {e}")
+            return None
+
+    def get_backtest_runs(
+        self,
+        run_type: str = None,
+        limit: int = 20
+    ) -> List[Dict[str, Any]]:
+        """
+        Get recent backtest runs.
+
+        Args:
+            run_type: Optional filter by run type
+            limit: Maximum number of runs to return
+
+        Returns:
+            List of run data dictionaries
+        """
+        try:
+            query = self.db.collection('backtest_runs')
+
+            if run_type:
+                query = query.where(filter=FieldFilter('run_type', '==', run_type))
+
+            query = query.order_by('saved_at', direction=firestore.Query.DESCENDING)
+            query = query.limit(limit)
+
+            docs = query.stream()
+            results = []
+
+            for doc in docs:
+                data = doc.to_dict()
+                data['id'] = doc.id
+                results.append(data)
+
+            return results
+
+        except Exception as e:
+            self.logger.error(f"Error fetching backtest runs: {e}")
+            return []
+
     # ========== HEALTH CHECK ==========
 
     def health_check(self) -> Dict[str, Any]:
@@ -2023,7 +2228,7 @@ class DatabaseService:
             return {
                 'status': 'healthy',
                 'database': 'aviation-intelligence',
-                'collections': ['news_articles', 'insights', 'tsa_data', 'fred_data', 'airline_reports', 'weekly_newsletters', 'carrier_financials', 'airline_credit_scores', 'airline_credit_score_history', 'airline_credit_ratings', 'config']
+                'collections': ['news_articles', 'insights', 'tsa_data', 'fred_data', 'airline_reports', 'weekly_newsletters', 'carrier_financials', 'airline_credit_scores', 'airline_credit_score_history', 'airline_credit_ratings', 'config', 'backtest_data', 'backtest_runs']
             }
         except Exception as e:
             return {
