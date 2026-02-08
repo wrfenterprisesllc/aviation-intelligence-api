@@ -116,6 +116,33 @@ except Exception as e:
     logger.warning(f"⚠️ PDF service initialization failed: {e}")
     pdf_service = None
 
+# Credit Scoring Services
+try:
+    from app.services.xbrl_service import XBRLService
+    from app.services.credit_signals_service import CreditSignalsService
+    from app.services.operational_service import OperationalService
+    from app.services.credit_qualitative_service import CreditQualitativeService
+    from app.services.credit_score_service import CreditScoreService
+
+    xbrl_service = XBRLService()
+    credit_signals_service = CreditSignalsService(db_service=db_service)
+    operational_service = OperationalService(bts_service=bts_service)
+    credit_qualitative_service = CreditQualitativeService(
+        gemini_service=gemini_service,
+        db_service=db_service
+    )
+    credit_score_service = CreditScoreService(
+        db_service=db_service,
+        xbrl_service=xbrl_service,
+        signals_service=credit_signals_service,
+        operational_service=operational_service,
+        qualitative_service=credit_qualitative_service
+    )
+    logger.info("✅ Credit Scoring services initialized")
+except Exception as e:
+    logger.warning(f"⚠️ Credit Scoring service initialization failed: {e}")
+    credit_score_service = None
+
 @app.before_request
 def before_request():
     """Record request start time for monitoring"""
@@ -142,7 +169,8 @@ def root():
             'monitoring': 'enhanced' if monitor else 'basic',
             'news_ingestion': news_service is not None,
             'firestore_database': db_service is not None,
-            'ai_insights': insights_service is not None
+            'ai_insights': insights_service is not None,
+            'credit_scoring': credit_score_service is not None
         },
         'endpoints': [
             '/health',
@@ -162,7 +190,12 @@ def root():
             '/api/reports',
             '/api/newsletter/generate',
             '/api/newsletter/latest',
-            '/api/newsletter/<id>'
+            '/api/newsletter/<id>',
+            '/api/credit-scores',
+            '/api/credit-scores/<code>',
+            '/api/credit-scores/<code>/refresh',
+            '/api/credit-scores/refresh-all',
+            '/api/credit-scores/<code>/history'
         ]
     })
 
@@ -178,7 +211,8 @@ def health():
             'tsa_service': 'active' if tsa_service else 'fallback',
             'monitoring': 'active' if monitor else 'disabled',
             'news_service': 'active' if news_service else 'disabled',
-            'database_service': 'active' if db_service else 'disabled'
+            'database_service': 'active' if db_service else 'disabled',
+            'credit_scoring': 'active' if credit_score_service else 'disabled'
         }
     })
 
@@ -3482,6 +3516,365 @@ def save_deal_evaluation():
 
     except Exception as e:
         logger.error(f"❌ Error saving deal evaluation: {e}")
+        return jsonify({
+            'success': False,
+            'error': str(e),
+            'timestamp': datetime.now().isoformat()
+        }), 500
+
+
+# ========== CREDIT SCORING ENDPOINTS ==========
+
+@app.route('/api/credit-scores', methods=['GET'])
+def get_all_credit_scores():
+    """
+    Get current credit scores for all airlines.
+
+    Returns list of airline credit scores with overall score, grade, and dimension scores.
+    """
+    start_time = datetime.now()
+
+    try:
+        if not credit_score_service:
+            return jsonify({
+                'success': False,
+                'error': 'Credit scoring service not available'
+            }), 503
+
+        scores = credit_score_service.get_all_scores()
+        response_time = (datetime.now() - start_time).total_seconds() * 1000
+
+        return jsonify({
+            'success': True,
+            'scores': scores,
+            'count': len(scores),
+            'timestamp': datetime.now().isoformat(),
+            'response_time_ms': round(response_time, 1)
+        })
+
+    except Exception as e:
+        logger.error(f"❌ Error fetching credit scores: {e}")
+        return jsonify({
+            'success': False,
+            'error': str(e),
+            'timestamp': datetime.now().isoformat()
+        }), 500
+
+
+@app.route('/api/credit-scores/<code>', methods=['GET'])
+def get_credit_score(code):
+    """
+    Get full credit score breakdown for a specific airline.
+
+    Args:
+        code: Airline ticker (DAL, UAL, AAL, LUV, JBLU, ALK, SAVE, ULCC)
+    """
+    start_time = datetime.now()
+
+    try:
+        if not credit_score_service:
+            return jsonify({
+                'success': False,
+                'error': 'Credit scoring service not available'
+            }), 503
+
+        score = credit_score_service.get_score(code.upper())
+
+        if not score:
+            return jsonify({
+                'success': False,
+                'error': f'No credit score found for {code.upper()}. Run POST /api/credit-scores/{code}/refresh to generate.'
+            }), 404
+
+        response_time = (datetime.now() - start_time).total_seconds() * 1000
+
+        return jsonify({
+            'success': True,
+            'score': score,
+            'timestamp': datetime.now().isoformat(),
+            'response_time_ms': round(response_time, 1)
+        })
+
+    except Exception as e:
+        logger.error(f"❌ Error fetching credit score for {code}: {e}")
+        return jsonify({
+            'success': False,
+            'error': str(e),
+            'timestamp': datetime.now().isoformat()
+        }), 500
+
+
+@app.route('/api/credit-scores/<code>/refresh', methods=['POST'])
+@require_api_key
+def refresh_credit_score(code):
+    """
+    Trigger rescore for a single airline.
+
+    Args:
+        code: Airline ticker
+
+    Optional query params:
+        as_of_date: Date for backtesting (YYYY-MM-DD)
+    """
+    start_time = datetime.now()
+
+    try:
+        if not credit_score_service:
+            return jsonify({
+                'success': False,
+                'error': 'Credit scoring service not available'
+            }), 503
+
+        as_of_date = request.args.get('as_of_date')
+
+        logger.info(f"📊 Refreshing credit score for {code.upper()}")
+        score = credit_score_service.calculate_credit_score(
+            code.upper(),
+            as_of_date=as_of_date
+        )
+
+        response_time = (datetime.now() - start_time).total_seconds() * 1000
+
+        return jsonify({
+            'success': True,
+            'score': score,
+            'timestamp': datetime.now().isoformat(),
+            'response_time_ms': round(response_time, 1)
+        })
+
+    except ValueError as e:
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 400
+    except Exception as e:
+        logger.error(f"❌ Error refreshing credit score for {code}: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+        return jsonify({
+            'success': False,
+            'error': str(e),
+            'timestamp': datetime.now().isoformat()
+        }), 500
+
+
+@app.route('/api/credit-scores/refresh-all', methods=['POST'])
+@require_api_key
+def refresh_all_credit_scores():
+    """
+    Trigger rescore for all airlines.
+
+    Processes airlines with 2-second delay between each for SEC rate limiting.
+    This endpoint may take 30-60 seconds to complete.
+    """
+    start_time = datetime.now()
+
+    try:
+        if not credit_score_service:
+            return jsonify({
+                'success': False,
+                'error': 'Credit scoring service not available'
+            }), 503
+
+        logger.info("📊 Refreshing all credit scores")
+        results = credit_score_service.refresh_all_scores(delay_seconds=2.0)
+
+        response_time = (datetime.now() - start_time).total_seconds() * 1000
+
+        return jsonify({
+            'success': results['success'],
+            'results': results,
+            'timestamp': datetime.now().isoformat(),
+            'response_time_ms': round(response_time, 1)
+        })
+
+    except Exception as e:
+        logger.error(f"❌ Error refreshing all credit scores: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+        return jsonify({
+            'success': False,
+            'error': str(e),
+            'timestamp': datetime.now().isoformat()
+        }), 500
+
+
+@app.route('/api/credit-scores/<code>/history', methods=['GET'])
+def get_credit_score_history(code):
+    """
+    Get historical credit scores for trend analysis.
+
+    Args:
+        code: Airline ticker
+
+    Query params:
+        limit: Max records to return (default 52 for ~1 year weekly)
+    """
+    start_time = datetime.now()
+
+    try:
+        if not credit_score_service:
+            return jsonify({
+                'success': False,
+                'error': 'Credit scoring service not available'
+            }), 503
+
+        limit = request.args.get('limit', 52, type=int)
+        history = credit_score_service.get_score_history(code.upper(), limit=limit)
+
+        response_time = (datetime.now() - start_time).total_seconds() * 1000
+
+        return jsonify({
+            'success': True,
+            'airline_code': code.upper(),
+            'history': history,
+            'count': len(history),
+            'timestamp': datetime.now().isoformat(),
+            'response_time_ms': round(response_time, 1)
+        })
+
+    except Exception as e:
+        logger.error(f"❌ Error fetching credit score history for {code}: {e}")
+        return jsonify({
+            'success': False,
+            'error': str(e),
+            'timestamp': datetime.now().isoformat()
+        }), 500
+
+
+@app.route('/api/credit-scores/seed-ratings', methods=['POST'])
+@require_api_key
+def seed_credit_ratings():
+    """
+    Seed initial published credit ratings for all airlines.
+
+    This populates the airline_credit_ratings collection with current
+    Moody's/S&P/Fitch ratings for the 8 airlines.
+    """
+    start_time = datetime.now()
+
+    try:
+        if not db_service:
+            return jsonify({
+                'success': False,
+                'error': 'Database service not available'
+            }), 503
+
+        # Current credit ratings as of Feb 2026 (to be updated as needed)
+        ratings_data = {
+            'DAL': {
+                'airline_code': 'DAL',
+                'airline_name': 'Delta Air Lines',
+                'moodys': 'Baa2',
+                'moodys_outlook': 'stable',
+                'sp': 'BBB-',
+                'sp_outlook': 'positive',
+                'fitch': 'BBB-',
+                'fitch_outlook': 'stable',
+                'as_of_date': '2026-02-01'
+            },
+            'UAL': {
+                'airline_code': 'UAL',
+                'airline_name': 'United Airlines',
+                'moodys': 'Baa3',
+                'moodys_outlook': 'stable',
+                'sp': 'BB+',
+                'sp_outlook': 'positive',
+                'fitch': 'BB+',
+                'fitch_outlook': 'stable',
+                'as_of_date': '2026-02-01'
+            },
+            'AAL': {
+                'airline_code': 'AAL',
+                'airline_name': 'American Airlines',
+                'moodys': 'B1',
+                'moodys_outlook': 'stable',
+                'sp': 'B+',
+                'sp_outlook': 'stable',
+                'fitch': 'B+',
+                'fitch_outlook': 'stable',
+                'as_of_date': '2026-02-01'
+            },
+            'LUV': {
+                'airline_code': 'LUV',
+                'airline_name': 'Southwest Airlines',
+                'moodys': 'Baa1',
+                'moodys_outlook': 'stable',
+                'sp': 'BBB',
+                'sp_outlook': 'stable',
+                'fitch': 'BBB',
+                'fitch_outlook': 'stable',
+                'as_of_date': '2026-02-01'
+            },
+            'JBLU': {
+                'airline_code': 'JBLU',
+                'airline_name': 'JetBlue Airways',
+                'moodys': 'B1',
+                'moodys_outlook': 'negative',
+                'sp': 'B',
+                'sp_outlook': 'stable',
+                'fitch': 'B',
+                'fitch_outlook': 'stable',
+                'as_of_date': '2026-02-01'
+            },
+            'ALK': {
+                'airline_code': 'ALK',
+                'airline_name': 'Alaska Air Group',
+                'moodys': 'Baa3',
+                'moodys_outlook': 'stable',
+                'sp': 'BB+',
+                'sp_outlook': 'positive',
+                'fitch': 'BBB-',
+                'fitch_outlook': 'stable',
+                'as_of_date': '2026-02-01'
+            },
+            'SAVE': {
+                'airline_code': 'SAVE',
+                'airline_name': 'Spirit Airlines',
+                'moodys': 'Caa2',
+                'moodys_outlook': 'negative',
+                'sp': 'CCC',
+                'sp_outlook': 'negative',
+                'fitch': 'CCC',
+                'fitch_outlook': 'negative',
+                'as_of_date': '2026-02-01'
+            },
+            'ULCC': {
+                'airline_code': 'ULCC',
+                'airline_name': 'Frontier Group',
+                'moodys': 'B3',
+                'moodys_outlook': 'stable',
+                'sp': 'B-',
+                'sp_outlook': 'stable',
+                'fitch': 'B-',
+                'fitch_outlook': 'stable',
+                'as_of_date': '2026-02-01'
+            }
+        }
+
+        seeded = []
+        errors = []
+
+        for code, rating_data in ratings_data.items():
+            try:
+                db_service.save_published_rating(rating_data)
+                seeded.append(code)
+            except Exception as e:
+                errors.append({'code': code, 'error': str(e)})
+
+        response_time = (datetime.now() - start_time).total_seconds() * 1000
+
+        return jsonify({
+            'success': len(errors) == 0,
+            'seeded': seeded,
+            'errors': errors,
+            'count': len(seeded),
+            'timestamp': datetime.now().isoformat(),
+            'response_time_ms': round(response_time, 1)
+        })
+
+    except Exception as e:
+        logger.error(f"❌ Error seeding credit ratings: {e}")
         return jsonify({
             'success': False,
             'error': str(e),

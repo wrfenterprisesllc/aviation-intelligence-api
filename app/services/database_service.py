@@ -1594,6 +1594,350 @@ class DatabaseService:
             self.logger.error(f"Error querying deal evaluations: {e}")
             return []
 
+    # ========== AIRLINE CREDIT SCORES ==========
+
+    def save_credit_score(self, score_data: Dict[str, Any]) -> Optional[str]:
+        """
+        Save airline credit score to Firestore.
+        Uses airline_code as document ID for easy lookup.
+
+        Args:
+            score_data: Dictionary containing credit score fields
+                - airline_code: str (e.g., 'DAL')
+                - airline_name: str
+                - overall_score: float (0-100)
+                - letter_grade: str (e.g., 'BBB+')
+                - financial_score, signals_score, operational_score, qualitative_score
+                - *_breakdown: Dict with detailed metrics
+                - calculated_at: datetime
+                - weights_used: Dict
+
+        Returns:
+            Document ID (airline_code) if successful, None otherwise
+        """
+        try:
+            if 'airline_code' not in score_data:
+                raise ValueError("Missing required field: airline_code")
+
+            doc_id = score_data['airline_code'].upper()
+
+            # Add timestamp if not present
+            if 'calculated_at' not in score_data:
+                score_data['calculated_at'] = datetime.now()
+
+            doc_ref = self.db.collection('airline_credit_scores').document(doc_id)
+            doc_ref.set(score_data)
+
+            self.logger.info(f"✅ Saved credit score for {doc_id}: {score_data.get('overall_score', 0):.1f} ({score_data.get('letter_grade', 'N/A')})")
+            return doc_id
+
+        except Exception as e:
+            self.logger.error(f"Error saving credit score: {e}")
+            return None
+
+    def get_credit_score(self, airline_code: str) -> Optional[Dict[str, Any]]:
+        """
+        Get current credit score for an airline.
+
+        Args:
+            airline_code: Airline ticker (e.g., 'DAL')
+
+        Returns:
+            Credit score dictionary or None if not found
+        """
+        try:
+            doc_ref = self.db.collection('airline_credit_scores').document(airline_code.upper())
+            doc = doc_ref.get()
+
+            if doc.exists:
+                data = doc.to_dict()
+                data['id'] = doc.id
+
+                # Convert timestamps
+                if 'calculated_at' in data and hasattr(data['calculated_at'], 'replace'):
+                    data['calculated_at'] = data['calculated_at'].replace(tzinfo=None)
+
+                return data
+            else:
+                self.logger.info(f"No credit score found for {airline_code}")
+                return None
+
+        except Exception as e:
+            self.logger.error(f"Error fetching credit score for {airline_code}: {e}")
+            return None
+
+    def get_all_credit_scores(self) -> List[Dict[str, Any]]:
+        """
+        Get current credit scores for all airlines.
+
+        Returns:
+            List of credit score dictionaries
+        """
+        try:
+            docs = self.db.collection('airline_credit_scores').stream()
+            scores = []
+
+            for doc in docs:
+                data = doc.to_dict()
+                data['id'] = doc.id
+
+                # Convert timestamps
+                if 'calculated_at' in data and hasattr(data['calculated_at'], 'replace'):
+                    data['calculated_at'] = data['calculated_at'].replace(tzinfo=None)
+
+                scores.append(data)
+
+            self.logger.info(f"📊 Retrieved {len(scores)} airline credit scores")
+            return scores
+
+        except Exception as e:
+            self.logger.error(f"Error fetching all credit scores: {e}")
+            return []
+
+    # ========== CREDIT SCORE HISTORY ==========
+
+    def save_credit_score_history(self, history_data: Dict[str, Any]) -> Optional[str]:
+        """
+        Save point-in-time credit score snapshot to history.
+        Auto-generates document ID.
+
+        Args:
+            history_data: Dictionary containing:
+                - airline_code: str
+                - overall_score: float
+                - letter_grade: str
+                - financial_score, signals_score, operational_score, qualitative_score: float
+                - calculated_at: datetime
+                - snapshot_type: str ('weekly_scheduled', 'manual_refresh', 'backtest')
+
+        Returns:
+            Document ID if successful, None otherwise
+        """
+        try:
+            if 'airline_code' not in history_data:
+                raise ValueError("Missing required field: airline_code")
+
+            # Add timestamp if not present
+            if 'calculated_at' not in history_data:
+                history_data['calculated_at'] = datetime.now()
+
+            doc_ref = self.db.collection('airline_credit_score_history').document()
+            doc_ref.set(history_data)
+
+            self.logger.info(f"✅ Saved credit score history for {history_data['airline_code']}")
+            return doc_ref.id
+
+        except Exception as e:
+            self.logger.error(f"Error saving credit score history: {e}")
+            return None
+
+    def get_credit_score_history(
+        self,
+        airline_code: str,
+        start_date: Optional[datetime] = None,
+        limit: int = 52
+    ) -> List[Dict[str, Any]]:
+        """
+        Get historical credit scores for an airline.
+
+        Args:
+            airline_code: Airline ticker
+            start_date: Optional start date filter
+            limit: Maximum number of records (default 52 for ~1 year weekly)
+
+        Returns:
+            List of historical score dictionaries, newest first
+        """
+        try:
+            query = self.db.collection('airline_credit_score_history')
+            query = query.where(filter=FieldFilter('airline_code', '==', airline_code.upper()))
+
+            if start_date:
+                query = query.where(filter=FieldFilter('calculated_at', '>=', start_date))
+
+            query = query.order_by('calculated_at', direction=firestore.Query.DESCENDING)
+            query = query.limit(limit)
+
+            docs = query.stream()
+            history = []
+
+            for doc in docs:
+                data = doc.to_dict()
+                data['id'] = doc.id
+
+                # Convert timestamps
+                if 'calculated_at' in data and hasattr(data['calculated_at'], 'replace'):
+                    data['calculated_at'] = data['calculated_at'].replace(tzinfo=None)
+
+                history.append(data)
+
+            self.logger.info(f"📊 Retrieved {len(history)} history records for {airline_code}")
+            return history
+
+        except Exception as e:
+            self.logger.error(f"Error fetching credit score history for {airline_code}: {e}")
+            return []
+
+    # ========== PUBLISHED CREDIT RATINGS ==========
+
+    def save_published_rating(self, rating_data: Dict[str, Any]) -> Optional[str]:
+        """
+        Save published agency ratings (Moody's/S&P/Fitch) for an airline.
+        Uses airline_code as document ID.
+
+        Args:
+            rating_data: Dictionary containing:
+                - airline_code: str
+                - moodys: str (e.g., 'Baa2')
+                - moodys_outlook: str ('positive', 'stable', 'negative')
+                - sp: str (e.g., 'BBB')
+                - sp_outlook: str
+                - fitch: str
+                - fitch_outlook: str
+                - as_of_date: str (YYYY-MM-DD)
+
+        Returns:
+            Document ID (airline_code) if successful, None otherwise
+        """
+        try:
+            if 'airline_code' not in rating_data:
+                raise ValueError("Missing required field: airline_code")
+
+            doc_id = rating_data['airline_code'].upper()
+
+            # Add last_updated timestamp
+            rating_data['last_updated'] = datetime.now()
+
+            doc_ref = self.db.collection('airline_credit_ratings').document(doc_id)
+            doc_ref.set(rating_data)
+
+            self.logger.info(f"✅ Saved published ratings for {doc_id}")
+            return doc_id
+
+        except Exception as e:
+            self.logger.error(f"Error saving published rating: {e}")
+            return None
+
+    def get_published_rating(self, airline_code: str) -> Optional[Dict[str, Any]]:
+        """
+        Get published agency ratings for an airline.
+
+        Args:
+            airline_code: Airline ticker
+
+        Returns:
+            Rating dictionary or None if not found
+        """
+        try:
+            doc_ref = self.db.collection('airline_credit_ratings').document(airline_code.upper())
+            doc = doc_ref.get()
+
+            if doc.exists:
+                data = doc.to_dict()
+                data['id'] = doc.id
+
+                # Convert timestamps
+                if 'last_updated' in data and hasattr(data['last_updated'], 'replace'):
+                    data['last_updated'] = data['last_updated'].replace(tzinfo=None)
+
+                return data
+            else:
+                self.logger.info(f"No published rating found for {airline_code}")
+                return None
+
+        except Exception as e:
+            self.logger.error(f"Error fetching published rating for {airline_code}: {e}")
+            return None
+
+    def get_all_published_ratings(self) -> List[Dict[str, Any]]:
+        """
+        Get published ratings for all airlines.
+
+        Returns:
+            List of rating dictionaries
+        """
+        try:
+            docs = self.db.collection('airline_credit_ratings').stream()
+            ratings = []
+
+            for doc in docs:
+                data = doc.to_dict()
+                data['id'] = doc.id
+
+                # Convert timestamps
+                if 'last_updated' in data and hasattr(data['last_updated'], 'replace'):
+                    data['last_updated'] = data['last_updated'].replace(tzinfo=None)
+
+                ratings.append(data)
+
+            self.logger.info(f"📊 Retrieved {len(ratings)} published ratings")
+            return ratings
+
+        except Exception as e:
+            self.logger.error(f"Error fetching all published ratings: {e}")
+            return []
+
+    # ========== CREDIT SCORE CONFIG ==========
+
+    def get_credit_score_weights(self) -> Optional[Dict[str, float]]:
+        """
+        Get scoring weights from config collection.
+
+        Returns:
+            Dictionary with weights or None if not found:
+            {'financial': 0.35, 'signals': 0.20, 'operational': 0.25, 'qualitative': 0.20}
+        """
+        try:
+            doc_ref = self.db.collection('config').document('credit_score_weights')
+            doc = doc_ref.get()
+
+            if doc.exists:
+                data = doc.to_dict()
+                # Return only the weight fields
+                weights = {
+                    'financial': data.get('financial', 0.35),
+                    'signals': data.get('signals', 0.20),
+                    'operational': data.get('operational', 0.25),
+                    'qualitative': data.get('qualitative', 0.20)
+                }
+                self.logger.info(f"📊 Loaded credit score weights from config")
+                return weights
+            else:
+                self.logger.info("No credit score weights config found, using defaults")
+                return None
+
+        except Exception as e:
+            self.logger.error(f"Error fetching credit score weights: {e}")
+            return None
+
+    def save_credit_score_weights(self, weights: Dict[str, float], updated_by: str = 'system') -> bool:
+        """
+        Save scoring weights to config collection.
+
+        Args:
+            weights: Dictionary with weight values
+            updated_by: Identifier for who/what made the update
+
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            doc_ref = self.db.collection('config').document('credit_score_weights')
+
+            config_data = {
+                **weights,
+                'updated_at': datetime.now(),
+                'updated_by': updated_by
+            }
+
+            doc_ref.set(config_data)
+            self.logger.info(f"✅ Saved credit score weights: {weights}")
+            return True
+
+        except Exception as e:
+            self.logger.error(f"Error saving credit score weights: {e}")
+            return False
+
     # ========== HEALTH CHECK ==========
 
     def health_check(self) -> Dict[str, Any]:
@@ -1611,7 +1955,7 @@ class DatabaseService:
             return {
                 'status': 'healthy',
                 'database': 'aviation-intelligence',
-                'collections': ['news_articles', 'insights', 'tsa_data', 'fred_data', 'airline_reports', 'weekly_newsletters', 'carrier_financials']
+                'collections': ['news_articles', 'insights', 'tsa_data', 'fred_data', 'airline_reports', 'weekly_newsletters', 'carrier_financials', 'airline_credit_scores', 'airline_credit_score_history', 'airline_credit_ratings', 'config']
             }
         except Exception as e:
             return {
