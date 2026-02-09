@@ -8,6 +8,7 @@ import logging
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional
 import yfinance as yf
+from app.utils.retry import with_retry
 
 logger = logging.getLogger(__name__)
 
@@ -56,6 +57,7 @@ class StockDataService:
         logger.warning(f"⚠️ No ticker found for airline: {airline_name}")
         return None
 
+    @with_retry(max_attempts=3, min_wait=2, max_wait=30)
     def get_stock_data(
         self,
         airline_name: str,

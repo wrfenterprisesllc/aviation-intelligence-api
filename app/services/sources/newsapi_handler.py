@@ -12,6 +12,7 @@ from newsapi import NewsApiClient
 from app.models.news_article import NewsArticle
 from .article_scraper import ArticleScraper
 from app.utils.text_cleaner import strip_images_from_html
+from app.utils.retry import with_retry
 
 logger = logging.getLogger(__name__)
 
@@ -61,7 +62,8 @@ class NewsAPIHandler:
             'ch-aviation.com'
         ]
     
-    def fetch_articles(self, 
+    @with_retry(max_attempts=3, min_wait=2, max_wait=30)
+    def fetch_articles(self,
                       days_back: int = 1,
                       max_articles: int = 100,
                       language: str = 'en') -> List[NewsArticle]:

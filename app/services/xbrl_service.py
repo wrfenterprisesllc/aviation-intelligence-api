@@ -12,6 +12,7 @@ import requests
 import time
 from datetime import datetime
 from typing import Dict, Optional, Any, List
+from app.utils.retry import make_request_with_retry
 
 logger = logging.getLogger(__name__)
 
@@ -146,7 +147,13 @@ class XBRLService:
             url = f"{self.base_url}/CIK{clean_cik}.json"
 
             logger.info(f"📊 Fetching XBRL data for {airline_code} from SEC EDGAR...")
-            response = self.session.get(url, timeout=30)
+            response = make_request_with_retry(
+                url,
+                method='GET',
+                timeout=30,
+                max_retries=3,
+                headers=dict(self.session.headers)
+            )
             response.raise_for_status()
 
             data = response.json()

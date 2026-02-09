@@ -12,6 +12,7 @@ from datetime import datetime, timedelta
 from typing import List, Dict, Any
 from bs4 import BeautifulSoup
 import logging
+from app.utils.retry import make_request_with_retry
 
 logger = logging.getLogger(__name__)
 
@@ -33,7 +34,13 @@ class TSADataService:
         try:
             logger.info("🛂 Fetching live TSA data...")
             
-            response = requests.get(self.base_url, headers=self.headers, timeout=10)
+            response = make_request_with_retry(
+                self.base_url,
+                method='GET',
+                timeout=10,
+                max_retries=2,
+                headers=self.headers
+            )
             
             if response.status_code == 200:
                 soup = BeautifulSoup(response.content, 'html.parser')

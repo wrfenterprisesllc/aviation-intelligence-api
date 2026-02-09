@@ -9,8 +9,10 @@ import json
 import os
 import logging
 from datetime import datetime
+from app.utils.retry import make_request_with_retry
 
 logger = logging.getLogger(__name__)
+
 
 class FREDCreditSpreadsFinal:
     """Final production FRED credit spreads using correct series with Firestore persistence"""
@@ -20,7 +22,24 @@ class FREDCreditSpreadsFinal:
         self.api_key = os.getenv('FRED_API_KEY', '13ab7454de31dec427aa8c95524d3e9a')
         self.base_url = "https://api.stlouisfed.org/fred/series/observations"
         self.db_service = db_service
-        
+
+    def _fetch_series(self, series_id: str, timeout: int = 10) -> requests.Response:
+        """Fetch a FRED series with retry logic."""
+        params = {
+            'series_id': series_id,
+            'api_key': self.api_key,
+            'file_type': 'json',
+            'limit': 1,
+            'sort_order': 'desc'
+        }
+        return make_request_with_retry(
+            self.base_url,
+            method='GET',
+            timeout=timeout,
+            max_retries=3,
+            params=params
+        )
+
     def get_real_credit_spreads(self):
         """Get real credit spreads using correct FRED series"""
         try:
@@ -42,9 +61,9 @@ class FREDCreditSpreadsFinal:
                 'sort_order': 'desc'
             }
             
-            # Get both series
-            corp_response = requests.get(self.base_url, params=corporate_params, timeout=10)
-            treas_response = requests.get(self.base_url, params=treasury_params, timeout=10)
+            # Get both series with retry logic
+            corp_response = self._fetch_series('BAMLC0A4CBBBEY')
+            treas_response = self._fetch_series('DGS10')
             
             if corp_response.status_code == 200 and treas_response.status_code == 200:
                 corp_data = corp_response.json()
@@ -168,7 +187,7 @@ class FREDCreditSpreadsFinal:
                     'sort_order': 'desc'
                 }
 
-                response = requests.get(self.base_url, params=params, timeout=10)
+                response = self._fetch_series(series_id)
                 if response.status_code == 200:
                     data = response.json()
                     if data.get('observations') and len(data['observations']) > 0:

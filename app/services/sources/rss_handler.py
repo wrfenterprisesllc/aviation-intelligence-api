@@ -14,6 +14,7 @@ import time
 from app.models.news_article import NewsArticle
 from .article_scraper import ArticleScraper
 from app.utils.text_cleaner import strip_images_from_html
+from app.utils.retry import make_request_with_retry
 
 logger = logging.getLogger(__name__)
 
@@ -56,8 +57,14 @@ class RSSHandler:
         logger.info(f"Fetching RSS feed: {feed_url}")
         
         try:
-            # Fetch the feed
-            response = self.session.get(feed_url, timeout=self.timeout)
+            # Fetch the feed with retry logic
+            response = make_request_with_retry(
+                feed_url,
+                method='GET',
+                timeout=self.timeout,
+                max_retries=2,
+                headers=dict(self.session.headers)
+            )
             response.raise_for_status()
             
             # Parse the feed

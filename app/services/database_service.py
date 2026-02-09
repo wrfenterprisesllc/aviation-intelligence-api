@@ -2211,6 +2211,208 @@ class DatabaseService:
             self.logger.error(f"Error fetching backtest runs: {e}")
             return []
 
+    # ========== PIPELINE RUNS (Epic 1.8 - Pipeline Monitoring) ==========
+
+    def save_pipeline_run(self, run_data: Dict[str, Any]) -> Optional[str]:
+        """
+        Save pipeline run record to Firestore.
+
+        Args:
+            run_data: Dictionary containing pipeline run fields:
+                - pipeline_name: str (e.g., 'news_ingestion', 'credit_score_refresh')
+                - run_id: str (unique run identifier)
+                - trigger: str ('scheduler', 'manual', 'api')
+                - status: str ('success', 'partial_failure', 'failure')
+                - started_at: datetime
+                - completed_at: datetime
+                - duration_seconds: float
+                - summary: Dict (items_processed, items_new, items_failed, etc.)
+                - errors: List[Dict] (error records)
+                - metadata: Dict (pipeline-specific context)
+
+        Returns:
+            Document ID (run_id) if successful, None otherwise
+        """
+        try:
+            run_id = run_data.get('run_id')
+            if not run_id:
+                run_id = f"run_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+                run_data['run_id'] = run_id
+
+            # Serialize for Firestore
+            serialized_data = self._serialize_for_firestore(run_data)
+
+            doc_ref = self.db.collection('pipeline_runs').document(run_id)
+            doc_ref.set(serialized_data)
+
+            self.logger.info(f"✅ Saved pipeline run: {run_id} ({run_data.get('pipeline_name')})")
+            return run_id
+
+        except Exception as e:
+            self.logger.error(f"Error saving pipeline run: {e}")
+            return None
+
+    def get_pipeline_runs(
+        self,
+        pipeline_name: Optional[str] = None,
+        status: Optional[str] = None,
+        limit: int = 50
+    ) -> List[Dict[str, Any]]:
+        """
+        Query pipeline runs with optional filters.
+
+        Args:
+            pipeline_name: Filter by pipeline name
+            status: Filter by status ('success', 'partial_failure', 'failure')
+            limit: Maximum number of runs to return
+
+        Returns:
+            List of pipeline run dictionaries, newest first
+        """
+        try:
+            query = self.db.collection('pipeline_runs')
+
+            if pipeline_name:
+                query = query.where(filter=FieldFilter('pipeline_name', '==', pipeline_name))
+
+            if status:
+                query = query.where(filter=FieldFilter('status', '==', status))
+
+            query = query.order_by('started_at', direction=firestore.Query.DESCENDING)
+            query = query.limit(limit)
+
+            docs = query.stream()
+            runs = []
+
+            for doc in docs:
+                data = doc.to_dict()
+                data['id'] = doc.id
+
+                # Convert timestamps
+                for field in ['started_at', 'completed_at']:
+                    if field in data and hasattr(data[field], 'replace'):
+                        data[field] = data[field].replace(tzinfo=None)
+
+                runs.append(data)
+
+            self.logger.info(f"📊 Retrieved {len(runs)} pipeline runs")
+            return runs
+
+        except Exception as e:
+            self.logger.error(f"Error querying pipeline runs: {e}")
+            return []
+
+    def get_last_successful_run(self, pipeline_name: str) -> Optional[Dict[str, Any]]:
+        """
+        Get the most recent successful run for a pipeline.
+
+        Args:
+            pipeline_name: Pipeline identifier
+
+        Returns:
+            Pipeline run dictionary or None if not found
+        """
+        try:
+            query = (self.db.collection('pipeline_runs')
+                     .where(filter=FieldFilter('pipeline_name', '==', pipeline_name))
+                     .where(filter=FieldFilter('status', '==', 'success'))
+                     .order_by('completed_at', direction=firestore.Query.DESCENDING)
+                     .limit(1))
+
+            docs = list(query.stream())
+
+            if docs:
+                data = docs[0].to_dict()
+                data['id'] = docs[0].id
+
+                # Convert timestamps
+                for field in ['started_at', 'completed_at']:
+                    if field in data and hasattr(data[field], 'replace'):
+                        data[field] = data[field].replace(tzinfo=None)
+
+                return data
+
+            return None
+
+        except Exception as e:
+            self.logger.error(f"Error fetching last successful run for {pipeline_name}: {e}")
+            return None
+
+    def get_pipeline_stats(self, pipeline_name: str, days: int = 7) -> Dict[str, Any]:
+        """
+        Get statistics for a pipeline over a time period.
+
+        Args:
+            pipeline_name: Pipeline identifier
+            days: Number of days to include
+
+        Returns:
+            Dictionary with success rate, avg duration, run counts
+        """
+        try:
+            from datetime import timedelta
+            cutoff_date = datetime.now() - timedelta(days=days)
+
+            query = (self.db.collection('pipeline_runs')
+                     .where(filter=FieldFilter('pipeline_name', '==', pipeline_name))
+                     .where(filter=FieldFilter('started_at', '>=', cutoff_date))
+                     .order_by('started_at', direction=firestore.Query.DESCENDING))
+
+            docs = list(query.stream())
+
+            if not docs:
+                return {
+                    'pipeline_name': pipeline_name,
+                    'period_days': days,
+                    'total_runs': 0,
+                    'success_count': 0,
+                    'failure_count': 0,
+                    'partial_failure_count': 0,
+                    'success_rate': 0,
+                    'avg_duration_seconds': 0
+                }
+
+            success_count = 0
+            failure_count = 0
+            partial_count = 0
+            total_duration = 0
+
+            for doc in docs:
+                data = doc.to_dict()
+                status = data.get('status', 'unknown')
+                duration = data.get('duration_seconds', 0)
+
+                if status == 'success':
+                    success_count += 1
+                elif status == 'failure':
+                    failure_count += 1
+                elif status == 'partial_failure':
+                    partial_count += 1
+
+                total_duration += duration
+
+            total_runs = len(docs)
+            success_rate = (success_count / total_runs * 100) if total_runs > 0 else 0
+            avg_duration = total_duration / total_runs if total_runs > 0 else 0
+
+            return {
+                'pipeline_name': pipeline_name,
+                'period_days': days,
+                'total_runs': total_runs,
+                'success_count': success_count,
+                'failure_count': failure_count,
+                'partial_failure_count': partial_count,
+                'success_rate': round(success_rate, 1),
+                'avg_duration_seconds': round(avg_duration, 2)
+            }
+
+        except Exception as e:
+            self.logger.error(f"Error getting pipeline stats for {pipeline_name}: {e}")
+            return {
+                'pipeline_name': pipeline_name,
+                'error': str(e)
+            }
+
     # ========== HEALTH CHECK ==========
 
     def health_check(self) -> Dict[str, Any]:

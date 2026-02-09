@@ -16,6 +16,7 @@ from flasgger import Swagger
 from app.utils.auth import require_api_key
 from app.utils.errors import register_error_handlers
 from app.utils.rate_limits import limiter, RATE_TIERS
+from app.utils.pipeline_tracker import PipelineTracker
 
 app = Flask(__name__)
 
@@ -724,48 +725,63 @@ def ingest_news():
     """
     start_time = datetime.now()
 
-    try:
-        if not news_service:
+    with PipelineTracker("news_ingestion", trigger="api", db_service=db_service) as tracker:
+        try:
+            if not news_service:
+                tracker.record_error("news_service", "unavailable", "News ingestion service not available")
+                return jsonify({
+                    'success': False,
+                    'error': 'News ingestion service not available',
+                    'timestamp': datetime.now().isoformat()
+                }), 503
+
+            # Get request parameters
+            data = request.get_json() or {}
+            source_types = data.get('source_types', None)
+
+            # Run ingestion
+            logger.info(f"📰 Starting news ingestion (source_types={source_types})")
+            stats = news_service.ingest_all_sources(source_types=source_types)
+
+            # Record summary for pipeline tracking
+            tracker.set_summary(
+                items_processed=stats['articles_processed'],
+                items_new=stats['articles_saved'],
+                items_skipped=stats['articles_skipped'],
+                sources_processed=stats['sources_processed']
+            )
+
+            # Record any errors from stats
+            for error in stats.get('errors', []):
+                tracker.record_error("source", "ingestion_error", str(error))
+
+            response_time = (datetime.now() - start_time).total_seconds() * 1000
+
+            logger.info(f"📰 News ingestion completed in {response_time:.1f}ms - {stats['articles_saved']} articles saved")
+
+            return jsonify({
+                'success': True,
+                'stats': {
+                    'articles_processed': stats['articles_processed'],
+                    'articles_saved': stats['articles_saved'],
+                    'articles_skipped': stats['articles_skipped'],
+                    'sources_processed': stats['sources_processed'],
+                    'errors': stats['errors'],
+                    'duration_seconds': stats.get('duration_seconds', 0)
+                },
+                'timestamp': datetime.now().isoformat(),
+                'response_time_ms': round(response_time, 1)
+            })
+
+        except Exception as e:
+            tracker.record_error("pipeline", "unhandled_exception", str(e))
+            logger.error(f"❌ Error in news ingestion endpoint: {e}")
             return jsonify({
                 'success': False,
-                'error': 'News ingestion service not available',
+                'error': 'Internal server error',
+                'message': str(e),
                 'timestamp': datetime.now().isoformat()
-            }), 503
-
-        # Get request parameters
-        data = request.get_json() or {}
-        source_types = data.get('source_types', None)
-
-        # Run ingestion
-        logger.info(f"📰 Starting news ingestion (source_types={source_types})")
-        stats = news_service.ingest_all_sources(source_types=source_types)
-
-        response_time = (datetime.now() - start_time).total_seconds() * 1000
-
-        logger.info(f"📰 News ingestion completed in {response_time:.1f}ms - {stats['articles_saved']} articles saved")
-
-        return jsonify({
-            'success': True,
-            'stats': {
-                'articles_processed': stats['articles_processed'],
-                'articles_saved': stats['articles_saved'],
-                'articles_skipped': stats['articles_skipped'],
-                'sources_processed': stats['sources_processed'],
-                'errors': stats['errors'],
-                'duration_seconds': stats.get('duration_seconds', 0)
-            },
-            'timestamp': datetime.now().isoformat(),
-            'response_time_ms': round(response_time, 1)
-        })
-
-    except Exception as e:
-        logger.error(f"❌ Error in news ingestion endpoint: {e}")
-        return jsonify({
-            'success': False,
-            'error': 'Internal server error',
-            'message': str(e),
-            'timestamp': datetime.now().isoformat()
-        }), 500
+            }), 500
 
 @app.route('/api/news/articles', methods=['GET'])
 def get_articles():
@@ -1706,77 +1722,90 @@ def generate_newsletter():
     """
     start_time = datetime.now()
 
-    try:
-        if not insights_service:
+    with PipelineTracker("newsletter_generation", trigger="api", db_service=db_service) as tracker:
+        try:
+            if not insights_service:
+                tracker.record_error("insights_service", "unavailable", "AI insights service not available")
+                return jsonify({
+                    'success': False,
+                    'error': 'AI insights service not available',
+                    'timestamp': datetime.now().isoformat()
+                }), 503
+
+            # Get request data
+            data = request.get_json() or {}
+            week_offset = data.get('week_offset', 0)
+            frequency = data.get('frequency', 'weekly')
+            format_type = data.get('format', 'html')
+            sections = data.get('sections', {
+                'executive_summary': True,
+                'market_indicators': True,
+                'industry_news': True,
+                'risk_analysis': True,
+                'outlook': True
+            })
+
+            # Generate newsletter
+            logger.info(f"📰 Generating {frequency} newsletter (offset: {week_offset}, format: {format_type})")
+            newsletter = insights_service.generate_weekly_newsletter(
+                week_offset=week_offset,
+                frequency=frequency,
+                format_type=format_type,
+                sections=sections
+            )
+
+            if not newsletter:
+                tracker.record_error("newsletter", "generation_failed", "Failed to generate newsletter")
+                return jsonify({
+                    'success': False,
+                    'error': 'Failed to generate newsletter',
+                    'timestamp': datetime.now().isoformat()
+                }), 500
+
+            # Record summary for pipeline tracking
+            tracker.set_summary(
+                newsletter_id=newsletter['id'],
+                articles_analyzed=newsletter.get('articles_analyzed', 0),
+                sections_generated=len(newsletter.get('sections', {})),
+                frequency=frequency,
+                format=format_type
+            )
+
+            response_time = (datetime.now() - start_time).total_seconds() * 1000
+
+            logger.info(f"✅ Newsletter generated in {response_time:.1f}ms")
+
+            return jsonify({
+                'success': True,
+                'newsletter': {
+                    'id': newsletter['id'],
+                    'week_start': newsletter['week_start'].isoformat() if isinstance(newsletter['week_start'], datetime) else newsletter['week_start'],
+                    'week_end': newsletter['week_end'].isoformat() if isinstance(newsletter['week_end'], datetime) else newsletter['week_end'],
+                    'generated_at': newsletter['generated_at'].isoformat() if isinstance(newsletter['generated_at'], datetime) else newsletter['generated_at'],
+                    'markdown_content': newsletter['markdown_content'],
+                    'html_content': newsletter['html_content'],
+                    'sections': newsletter['sections'],
+                    'articles_analyzed': newsletter['articles_analyzed'],
+                    'previous_newsletter_id': newsletter.get('previous_newsletter_id'),
+                    'predictions_from_last_week': newsletter.get('predictions_from_last_week'),
+                    'metadata': newsletter['metadata'],
+                    'frequency': newsletter.get('frequency', 'weekly'),
+                    'format': newsletter.get('format', 'html')
+                },
+                'timestamp': datetime.now().isoformat(),
+                'response_time_ms': round(response_time, 1)
+            })
+
+        except Exception as e:
+            tracker.record_error("pipeline", "unhandled_exception", str(e))
+            logger.error(f"❌ Error in newsletter generation endpoint: {e}", exc_info=True)
             return jsonify({
                 'success': False,
-                'error': 'AI insights service not available',
-                'timestamp': datetime.now().isoformat()
-            }), 503
-
-        # Get request data
-        data = request.get_json() or {}
-        week_offset = data.get('week_offset', 0)
-        frequency = data.get('frequency', 'weekly')
-        format_type = data.get('format', 'html')
-        sections = data.get('sections', {
-            'executive_summary': True,
-            'market_indicators': True,
-            'industry_news': True,
-            'risk_analysis': True,
-            'outlook': True
-        })
-
-        # Generate newsletter
-        logger.info(f"📰 Generating {frequency} newsletter (offset: {week_offset}, format: {format_type})")
-        newsletter = insights_service.generate_weekly_newsletter(
-            week_offset=week_offset,
-            frequency=frequency,
-            format_type=format_type,
-            sections=sections
-        )
-
-        if not newsletter:
-            return jsonify({
-                'success': False,
-                'error': 'Failed to generate newsletter',
+                'error': str(e),  # Show actual error message
+                'error_type': type(e).__name__,
+                'message': 'Newsletter generation failed',
                 'timestamp': datetime.now().isoformat()
             }), 500
-
-        response_time = (datetime.now() - start_time).total_seconds() * 1000
-
-        logger.info(f"✅ Newsletter generated in {response_time:.1f}ms")
-
-        return jsonify({
-            'success': True,
-            'newsletter': {
-                'id': newsletter['id'],
-                'week_start': newsletter['week_start'].isoformat() if isinstance(newsletter['week_start'], datetime) else newsletter['week_start'],
-                'week_end': newsletter['week_end'].isoformat() if isinstance(newsletter['week_end'], datetime) else newsletter['week_end'],
-                'generated_at': newsletter['generated_at'].isoformat() if isinstance(newsletter['generated_at'], datetime) else newsletter['generated_at'],
-                'markdown_content': newsletter['markdown_content'],
-                'html_content': newsletter['html_content'],
-                'sections': newsletter['sections'],
-                'articles_analyzed': newsletter['articles_analyzed'],
-                'previous_newsletter_id': newsletter.get('previous_newsletter_id'),
-                'predictions_from_last_week': newsletter.get('predictions_from_last_week'),
-                'metadata': newsletter['metadata'],
-                'frequency': newsletter.get('frequency', 'weekly'),
-                'format': newsletter.get('format', 'html')
-            },
-            'timestamp': datetime.now().isoformat(),
-            'response_time_ms': round(response_time, 1)
-        })
-
-    except Exception as e:
-        logger.error(f"❌ Error in newsletter generation endpoint: {e}", exc_info=True)
-        return jsonify({
-            'success': False,
-            'error': str(e),  # Show actual error message
-            'error_type': type(e).__name__,
-            'message': 'Newsletter generation failed',
-            'timestamp': datetime.now().isoformat()
-        }), 500
 
 @app.route('/api/newsletter/latest', methods=['GET'])
 def get_latest_newsletter():
@@ -2685,132 +2714,151 @@ def ingest_financial_data():
     start_time = datetime.now()
     from datetime import timezone
 
-    results = {
-        'success': True,
-        'fred_data': {},
-        'carrier_financials': {},
-        'tsa_data': {},
-        'bts_data': {},
-        'timestamp': datetime.now(timezone.utc).isoformat(),
-        'errors': []
-    }
+    with PipelineTracker("financial_data", trigger="api", db_service=db_service) as tracker:
+        results = {
+            'success': True,
+            'fred_data': {},
+            'carrier_financials': {},
+            'tsa_data': {},
+            'bts_data': {},
+            'timestamp': datetime.now(timezone.utc).isoformat(),
+            'errors': []
+        }
 
-    # 1. Fetch and store FRED credit spreads (all tiers)
-    try:
-        if fred_service:
-            logger.info("📊 Ingesting FRED credit spreads...")
-            fred_data = fred_service.get_credit_spread_benchmarks()
-            if fred_data and fred_data.get('success'):
-                db_service.store_financial_snapshot('fred_spreads', fred_data)
-                results['fred_data'] = {
-                    'status': 'success',
-                    'data_date': fred_data.get('data_date'),
-                    'spreads_fetched': len(fred_data.get('spreads', {}))
-                }
-                logger.info(f"✅ FRED data stored: {fred_data.get('data_date')}")
-            else:
-                results['fred_data'] = {'status': 'no_data'}
-                results['errors'].append('FRED: No data returned')
-        else:
-            results['fred_data'] = {'status': 'service_unavailable'}
-            results['errors'].append('FRED: Service not available')
-    except Exception as e:
-        results['fred_data'] = {'status': 'error', 'message': str(e)}
-        results['errors'].append(f'FRED: {str(e)}')
-        logger.error(f"❌ FRED ingestion error: {e}")
-
-    # 2. Fetch and store carrier financials for all tracked airlines
-    airlines = [
-        'United Airlines', 'Delta Air Lines', 'American Airlines',
-        'Southwest Airlines', 'Alaska Airlines', 'JetBlue Airways'
-    ]
-
-    if financial_service:
-        logger.info("💰 Ingesting carrier financials...")
-        for airline in airlines:
-            try:
-                balance_sheet = financial_service.get_balance_sheet_data(airline)
-                if balance_sheet:
-                    # Add credit rating estimate
-                    debt_to_ebitda = balance_sheet.get('debt_to_ebitda')
-                    interest_coverage = balance_sheet.get('interest_coverage')
-                    if debt_to_ebitda and interest_coverage:
-                        rating = financial_service.estimate_credit_rating(debt_to_ebitda, interest_coverage)
-                        balance_sheet['credit_rating_estimate'] = rating
-
-                    db_service.store_carrier_financial_snapshot(airline, balance_sheet)
-                    results['carrier_financials'][airline] = 'success'
-                    logger.info(f"✅ {airline} financials stored")
+        # 1. Fetch and store FRED credit spreads (all tiers)
+        try:
+            if fred_service:
+                logger.info("📊 Ingesting FRED credit spreads...")
+                fred_data = fred_service.get_credit_spread_benchmarks()
+                if fred_data and fred_data.get('success'):
+                    db_service.store_financial_snapshot('fred_spreads', fred_data)
+                    results['fred_data'] = {
+                        'status': 'success',
+                        'data_date': fred_data.get('data_date'),
+                        'spreads_fetched': len(fred_data.get('spreads', {}))
+                    }
+                    logger.info(f"✅ FRED data stored: {fred_data.get('data_date')}")
                 else:
-                    results['carrier_financials'][airline] = 'no_data'
-            except Exception as e:
-                results['carrier_financials'][airline] = f'error: {str(e)}'
-                results['errors'].append(f'{airline}: {str(e)}')
-                logger.error(f"❌ {airline} ingestion error: {e}")
-    else:
-        for airline in airlines:
-            results['carrier_financials'][airline] = 'service_unavailable'
-        results['errors'].append('Financial service not available')
-
-    # 3. Fetch and store TSA passenger data
-    try:
-        if tsa_service:
-            logger.info("🛂 Ingesting TSA passenger data...")
-            tsa_data = tsa_service.get_real_tsa_data()
-            if tsa_data and tsa_data.get('success'):
-                db_service.store_financial_snapshot('tsa_passengers', tsa_data['data'])
-                results['tsa_data'] = {
-                    'status': 'success',
-                    'date': tsa_data['data'].get('date'),
-                    'throughput': tsa_data['data'].get('current_throughput')
-                }
-                logger.info(f"✅ TSA data stored: {tsa_data['data'].get('date')}")
+                    results['fred_data'] = {'status': 'no_data'}
+                    results['errors'].append('FRED: No data returned')
             else:
-                results['tsa_data'] = {'status': 'no_data'}
-        else:
-            results['tsa_data'] = {'status': 'service_unavailable'}
-    except Exception as e:
-        results['tsa_data'] = {'status': 'error', 'message': str(e)}
-        results['errors'].append(f'TSA: {str(e)}')
-        logger.error(f"❌ TSA ingestion error: {e}")
+                results['fred_data'] = {'status': 'service_unavailable'}
+                results['errors'].append('FRED: Service not available')
+        except Exception as e:
+            results['fred_data'] = {'status': 'error', 'message': str(e)}
+            results['errors'].append(f'FRED: {str(e)}')
+            tracker.record_error("fred", "ingestion_error", str(e))
+            logger.error(f"❌ FRED ingestion error: {e}")
 
-    # 4. Fetch and store BTS operational data for carriers
-    if bts_service:
-        logger.info("📈 Ingesting BTS operational metrics...")
-        results['bts_data'] = {}
-        for airline in airlines:
-            try:
-                # Get carrier code from airline name
-                carrier_code = None
-                for code, info in bts_service.CARRIER_CODES.items():
-                    if info['name'] == airline:
-                        carrier_code = code
-                        break
+        # 2. Fetch and store carrier financials for all tracked airlines
+        airlines = [
+            'United Airlines', 'Delta Air Lines', 'American Airlines',
+            'Southwest Airlines', 'Alaska Airlines', 'JetBlue Airways'
+        ]
 
-                if carrier_code:
-                    bts_data = bts_service.get_carrier_financials(carrier_code)
-                    if bts_data:
-                        db_service.store_financial_snapshot(f'bts_{airline.replace(" ", "_")}', bts_data)
-                        results['bts_data'][airline] = 'success'
-                        logger.info(f"✅ BTS data stored for {airline}")
+        if financial_service:
+            logger.info("💰 Ingesting carrier financials...")
+            for airline in airlines:
+                try:
+                    balance_sheet = financial_service.get_balance_sheet_data(airline)
+                    if balance_sheet:
+                        # Add credit rating estimate
+                        debt_to_ebitda = balance_sheet.get('debt_to_ebitda')
+                        interest_coverage = balance_sheet.get('interest_coverage')
+                        if debt_to_ebitda and interest_coverage:
+                            rating = financial_service.estimate_credit_rating(debt_to_ebitda, interest_coverage)
+                            balance_sheet['credit_rating_estimate'] = rating
+
+                        db_service.store_carrier_financial_snapshot(airline, balance_sheet)
+                        results['carrier_financials'][airline] = 'success'
+                        logger.info(f"✅ {airline} financials stored")
                     else:
-                        results['bts_data'][airline] = 'no_data'
+                        results['carrier_financials'][airline] = 'no_data'
+                except Exception as e:
+                    results['carrier_financials'][airline] = f'error: {str(e)}'
+                    results['errors'].append(f'{airline}: {str(e)}')
+                    tracker.record_error("carrier_financials", "ingestion_error", f"{airline}: {str(e)}")
+                    logger.error(f"❌ {airline} ingestion error: {e}")
+        else:
+            for airline in airlines:
+                results['carrier_financials'][airline] = 'service_unavailable'
+            results['errors'].append('Financial service not available')
+
+        # 3. Fetch and store TSA passenger data
+        try:
+            if tsa_service:
+                logger.info("🛂 Ingesting TSA passenger data...")
+                tsa_data = tsa_service.get_real_tsa_data()
+                if tsa_data and tsa_data.get('success'):
+                    db_service.store_financial_snapshot('tsa_passengers', tsa_data['data'])
+                    results['tsa_data'] = {
+                        'status': 'success',
+                        'date': tsa_data['data'].get('date'),
+                        'throughput': tsa_data['data'].get('current_throughput')
+                    }
+                    logger.info(f"✅ TSA data stored: {tsa_data['data'].get('date')}")
                 else:
-                    results['bts_data'][airline] = 'carrier_not_found'
-            except Exception as e:
-                results['bts_data'][airline] = f'error: {str(e)}'
-                logger.error(f"❌ BTS ingestion error for {airline}: {e}")
-    else:
-        results['bts_data'] = {'status': 'service_unavailable'}
+                    results['tsa_data'] = {'status': 'no_data'}
+            else:
+                results['tsa_data'] = {'status': 'service_unavailable'}
+        except Exception as e:
+            results['tsa_data'] = {'status': 'error', 'message': str(e)}
+            results['errors'].append(f'TSA: {str(e)}')
+            tracker.record_error("tsa", "ingestion_error", str(e))
+            logger.error(f"❌ TSA ingestion error: {e}")
 
-    # Calculate response time and finalize
-    response_time = (datetime.now() - start_time).total_seconds() * 1000
-    results['response_time_ms'] = round(response_time, 1)
-    results['success'] = len(results['errors']) == 0
+        # 4. Fetch and store BTS operational data for carriers
+        if bts_service:
+            logger.info("📈 Ingesting BTS operational metrics...")
+            results['bts_data'] = {}
+            for airline in airlines:
+                try:
+                    # Get carrier code from airline name
+                    carrier_code = None
+                    for code, info in bts_service.CARRIER_CODES.items():
+                        if info['name'] == airline:
+                            carrier_code = code
+                            break
 
-    logger.info(f"📊 Financial data ingestion complete in {response_time:.1f}ms - {len(results['errors'])} errors")
+                    if carrier_code:
+                        bts_data = bts_service.get_carrier_financials(carrier_code)
+                        if bts_data:
+                            db_service.store_financial_snapshot(f'bts_{airline.replace(" ", "_")}', bts_data)
+                            results['bts_data'][airline] = 'success'
+                            logger.info(f"✅ BTS data stored for {airline}")
+                        else:
+                            results['bts_data'][airline] = 'no_data'
+                    else:
+                        results['bts_data'][airline] = 'carrier_not_found'
+                except Exception as e:
+                    results['bts_data'][airline] = f'error: {str(e)}'
+                    tracker.record_error("bts", "ingestion_error", f"{airline}: {str(e)}")
+                    logger.error(f"❌ BTS ingestion error for {airline}: {e}")
+        else:
+            results['bts_data'] = {'status': 'service_unavailable'}
 
-    return jsonify(results)
+        # Calculate response time and finalize
+        response_time = (datetime.now() - start_time).total_seconds() * 1000
+        results['response_time_ms'] = round(response_time, 1)
+        results['success'] = len(results['errors']) == 0
+
+        # Record summary for pipeline tracking
+        fred_ok = 1 if results.get('fred_data', {}).get('status') == 'success' else 0
+        tsa_ok = 1 if results.get('tsa_data', {}).get('status') == 'success' else 0
+        carrier_ok = sum(1 for v in results.get('carrier_financials', {}).values() if v == 'success')
+        bts_ok = sum(1 for v in results.get('bts_data', {}).values() if v == 'success')
+
+        tracker.set_summary(
+            fred_success=fred_ok,
+            tsa_success=tsa_ok,
+            carriers_success=carrier_ok,
+            bts_success=bts_ok,
+            total_errors=len(results['errors'])
+        )
+
+        logger.info(f"📊 Financial data ingestion complete in {response_time:.1f}ms - {len(results['errors'])} errors")
+
+        return jsonify(results)
 
 
 @app.route('/api/ingest/status', methods=['GET'])
@@ -3038,67 +3086,78 @@ def ingest_defense_contracts():
             'error': 'Database service not available'
         }), 503
 
-    try:
-        # Parse request body
-        data = request.get_json() or {}
-        days_back = data.get('days_back', 7)
-        aviation_only = data.get('aviation_only', True)
+    with PipelineTracker("defense_contracts", trigger="api", db_service=db_service) as tracker:
+        try:
+            # Parse request body
+            data = request.get_json() or {}
+            days_back = data.get('days_back', 7)
+            aviation_only = data.get('aviation_only', True)
 
-        logger.info(f"🎯 Starting defense contracts ingestion (last {days_back} days, aviation_only={aviation_only})")
+            logger.info(f"🎯 Starting defense contracts ingestion (last {days_back} days, aviation_only={aviation_only})")
 
-        # Fetch contracts from defense.gov
-        contracts = defense_contracts_handler.fetch_recent_contracts(
-            days_back=days_back,
-            aviation_only=aviation_only
-        )
+            # Fetch contracts from defense.gov
+            contracts = defense_contracts_handler.fetch_recent_contracts(
+                days_back=days_back,
+                aviation_only=aviation_only
+            )
 
-        logger.info(f"📋 Fetched {len(contracts)} contracts from defense.gov")
+            logger.info(f"📋 Fetched {len(contracts)} contracts from defense.gov")
 
-        # Store contracts in database
-        saved_count = 0
-        duplicate_count = 0
-        errors = []
+            # Store contracts in database
+            saved_count = 0
+            duplicate_count = 0
+            errors = []
 
-        for contract in contracts:
-            try:
-                doc_id = db_service.save_defense_contract(contract)
-                if doc_id:
-                    saved_count += 1
-                else:
-                    duplicate_count += 1
-            except Exception as e:
-                errors.append(f"{contract.get('contractor', 'Unknown')}: {str(e)}")
+            for contract in contracts:
+                try:
+                    doc_id = db_service.save_defense_contract(contract)
+                    if doc_id:
+                        saved_count += 1
+                    else:
+                        duplicate_count += 1
+                except Exception as e:
+                    errors.append(f"{contract.get('contractor', 'Unknown')}: {str(e)}")
+                    tracker.record_error("contract_save", "database_error", f"{contract.get('contractor', 'Unknown')}: {str(e)}")
 
-        # Generate summary
-        summary = defense_contracts_handler.get_aviation_contract_summary(contracts)
+            # Generate summary
+            summary = defense_contracts_handler.get_aviation_contract_summary(contracts)
 
-        response_time = (datetime.now() - start_time).total_seconds() * 1000
+            response_time = (datetime.now() - start_time).total_seconds() * 1000
 
-        result = {
-            'success': True,
-            'contracts_fetched': len(contracts),
-            'contracts_saved': saved_count,
-            'duplicates_skipped': duplicate_count,
-            'errors': errors,
-            'summary': summary,
-            'parameters': {
-                'days_back': days_back,
-                'aviation_only': aviation_only
-            },
-            'timestamp': datetime.now(timezone.utc).isoformat(),
-            'response_time_ms': round(response_time, 1)
-        }
+            # Record summary for pipeline tracking
+            tracker.set_summary(
+                items_fetched=len(contracts),
+                items_new=saved_count,
+                items_skipped=duplicate_count,
+                errors_count=len(errors)
+            )
 
-        logger.info(f"✅ Defense contracts ingestion complete: {saved_count} saved, {duplicate_count} duplicates, {len(errors)} errors")
+            result = {
+                'success': True,
+                'contracts_fetched': len(contracts),
+                'contracts_saved': saved_count,
+                'duplicates_skipped': duplicate_count,
+                'errors': errors,
+                'summary': summary,
+                'parameters': {
+                    'days_back': days_back,
+                    'aviation_only': aviation_only
+                },
+                'timestamp': datetime.now(timezone.utc).isoformat(),
+                'response_time_ms': round(response_time, 1)
+            }
 
-        return jsonify(result)
+            logger.info(f"✅ Defense contracts ingestion complete: {saved_count} saved, {duplicate_count} duplicates, {len(errors)} errors")
 
-    except Exception as e:
-        logger.error(f"Error during defense contracts ingestion: {e}")
-        return jsonify({
-            'success': False,
-            'error': str(e)
-        }), 500
+            return jsonify(result)
+
+        except Exception as e:
+            tracker.record_error("pipeline", "unhandled_exception", str(e))
+            logger.error(f"Error during defense contracts ingestion: {e}")
+            return jsonify({
+                'success': False,
+                'error': str(e)
+            }), 500
 
 
 @app.route('/api/defense-contracts/test', methods=['GET'])
@@ -3964,34 +4023,53 @@ def refresh_all_credit_scores():
     """
     start_time = datetime.now()
 
-    try:
-        if not credit_score_service:
+    with PipelineTracker("credit_score_refresh", trigger="api", db_service=db_service) as tracker:
+        try:
+            if not credit_score_service:
+                tracker.record_error("credit_score_service", "unavailable", "Credit scoring service not available")
+                return jsonify({
+                    'success': False,
+                    'error': 'Credit scoring service not available'
+                }), 503
+
+            logger.info("📊 Refreshing all credit scores")
+            results = credit_score_service.refresh_all_scores(delay_seconds=2.0)
+
+            # Record summary for pipeline tracking
+            airlines_processed = len(results.get('scores', {}))
+            airlines_success = sum(1 for v in results.get('scores', {}).values() if v.get('success', False))
+            airlines_failed = airlines_processed - airlines_success
+
+            tracker.set_summary(
+                airlines_processed=airlines_processed,
+                airlines_success=airlines_success,
+                airlines_failed=airlines_failed
+            )
+
+            # Record any errors from results
+            for airline, score_result in results.get('scores', {}).items():
+                if not score_result.get('success', False):
+                    tracker.record_error("credit_score", "calculation_failed", f"{airline}: {score_result.get('error', 'Unknown error')}")
+
+            response_time = (datetime.now() - start_time).total_seconds() * 1000
+
+            return jsonify({
+                'success': results['success'],
+                'results': results,
+                'timestamp': datetime.now().isoformat(),
+                'response_time_ms': round(response_time, 1)
+            })
+
+        except Exception as e:
+            tracker.record_error("pipeline", "unhandled_exception", str(e))
+            logger.error(f"❌ Error refreshing all credit scores: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
             return jsonify({
                 'success': False,
-                'error': 'Credit scoring service not available'
-            }), 503
-
-        logger.info("📊 Refreshing all credit scores")
-        results = credit_score_service.refresh_all_scores(delay_seconds=2.0)
-
-        response_time = (datetime.now() - start_time).total_seconds() * 1000
-
-        return jsonify({
-            'success': results['success'],
-            'results': results,
-            'timestamp': datetime.now().isoformat(),
-            'response_time_ms': round(response_time, 1)
-        })
-
-    except Exception as e:
-        logger.error(f"❌ Error refreshing all credit scores: {e}")
-        import traceback
-        logger.error(traceback.format_exc())
-        return jsonify({
-            'success': False,
-            'error': str(e),
-            'timestamp': datetime.now().isoformat()
-        }), 500
+                'error': str(e),
+                'timestamp': datetime.now().isoformat()
+            }), 500
 
 
 @app.route('/api/credit-scores/<code>/history', methods=['GET'])
@@ -4770,6 +4848,187 @@ def get_historical_score(code):
             'success': False,
             'error': str(e),
             'timestamp': datetime.now().isoformat()
+        }), 500
+
+
+# ============================================================================
+# PIPELINE MONITORING ENDPOINTS
+# ============================================================================
+
+@app.route('/api/pipelines/status', methods=['GET'])
+@limiter.limit(RATE_TIERS['public'])
+def get_pipelines_status():
+    """
+    Get pipeline freshness status.
+
+    Returns overall health status and individual pipeline freshness.
+    Public endpoint - no authentication required.
+    ---
+    tags:
+      - Pipeline Monitoring
+    responses:
+      200:
+        description: Pipeline freshness status
+        schema:
+          type: object
+          properties:
+            overall_status:
+              type: string
+              enum: [healthy, degraded, critical]
+            checked_at:
+              type: string
+              format: date-time
+            pipelines:
+              type: object
+    """
+    try:
+        from app.services.freshness_service import FreshnessService
+        freshness = FreshnessService(db_service)
+        return jsonify(freshness.get_freshness_status())
+    except Exception as e:
+        logger.error(f"Error getting pipeline status: {e}")
+        return jsonify({
+            'overall_status': 'unknown',
+            'error': str(e),
+            'checked_at': datetime.now().isoformat() + 'Z'
+        }), 500
+
+
+@app.route('/api/pipelines/runs', methods=['GET'])
+@require_api_key
+def get_pipeline_runs():
+    """
+    Get recent pipeline runs.
+
+    Query parameters:
+    - pipeline: Filter by pipeline name (optional)
+    - limit: Max number of runs to return (default 50, max 100)
+    ---
+    tags:
+      - Pipeline Monitoring
+    parameters:
+      - name: X-API-Key
+        in: header
+        type: string
+        required: true
+      - name: pipeline
+        in: query
+        type: string
+        required: false
+      - name: limit
+        in: query
+        type: integer
+        default: 50
+    responses:
+      200:
+        description: List of pipeline runs
+    """
+    try:
+        pipeline = request.args.get('pipeline')
+        limit = min(int(request.args.get('limit', 50)), 100)
+        runs = db_service.get_pipeline_runs(pipeline_name=pipeline, limit=limit)
+        return jsonify({
+            'runs': runs,
+            'count': len(runs),
+            'filter': {'pipeline': pipeline, 'limit': limit}
+        })
+    except Exception as e:
+        logger.error(f"Error getting pipeline runs: {e}")
+        return jsonify({
+            'error': str(e),
+            'runs': [],
+            'count': 0
+        }), 500
+
+
+@app.route('/api/pipelines/check-freshness', methods=['POST'])
+@require_api_key
+def check_and_alert_freshness():
+    """
+    Check freshness and send alerts for stale pipelines.
+
+    Designed for Cloud Scheduler to run every 4 hours.
+    Sends Slack alerts if pipelines are stale.
+    ---
+    tags:
+      - Pipeline Monitoring
+    parameters:
+      - name: X-API-Key
+        in: header
+        type: string
+        required: true
+    responses:
+      200:
+        description: Staleness check result
+    """
+    try:
+        from app.services.freshness_service import FreshnessService
+        from app.utils.alerting import send_staleness_alert
+
+        freshness = FreshnessService(db_service)
+        stale = freshness.get_stale_pipelines()
+
+        if stale:
+            send_staleness_alert(stale)
+            logger.warning(f"⚠️ {len(stale)} stale pipelines detected and alerted")
+
+        return jsonify({
+            'success': True,
+            'stale_count': len(stale),
+            'stale_pipelines': stale,
+            'checked_at': datetime.now().isoformat() + 'Z'
+        })
+    except Exception as e:
+        logger.error(f"Error checking freshness: {e}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+
+@app.route('/api/pipelines/<pipeline_name>', methods=['GET'])
+@require_api_key
+def get_pipeline_details(pipeline_name):
+    """
+    Get detailed status for a specific pipeline.
+
+    Returns recent runs, last success, and configuration.
+    ---
+    tags:
+      - Pipeline Monitoring
+    parameters:
+      - name: X-API-Key
+        in: header
+        type: string
+        required: true
+      - name: pipeline_name
+        in: path
+        type: string
+        required: true
+    responses:
+      200:
+        description: Pipeline details
+    """
+    try:
+        from app.services.freshness_service import FRESHNESS_THRESHOLDS
+
+        runs = db_service.get_pipeline_runs(pipeline_name=pipeline_name, limit=10)
+        last_success = db_service.get_last_successful_run(pipeline_name)
+        stats = db_service.get_pipeline_stats(pipeline_name)
+
+        return jsonify({
+            'pipeline_name': pipeline_name,
+            'recent_runs': runs,
+            'last_success': last_success,
+            'stats': stats,
+            'config': FRESHNESS_THRESHOLDS.get(pipeline_name, {}),
+            'timestamp': datetime.now().isoformat() + 'Z'
+        })
+    except Exception as e:
+        logger.error(f"Error getting pipeline details for {pipeline_name}: {e}")
+        return jsonify({
+            'pipeline_name': pipeline_name,
+            'error': str(e)
         }), 500
 
 

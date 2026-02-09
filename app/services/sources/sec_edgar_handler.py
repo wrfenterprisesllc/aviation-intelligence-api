@@ -11,6 +11,7 @@ import json
 import time
 
 from app.models.news_article import NewsArticle, SEC_TARGET_COMPANIES
+from app.utils.retry import make_request_with_retry
 
 logger = logging.getLogger(__name__)
 
@@ -126,9 +127,15 @@ class SECEdgarHandler:
             # Format CIK (remove leading zeros, then pad to 10 digits)
             clean_cik = str(int(cik)).zfill(10)
             url = f"{self.submissions_base}/CIK{clean_cik}.json"
-            
+
             self._rate_limit()
-            response = self.session.get(url, timeout=30)
+            response = make_request_with_retry(
+                url,
+                method='GET',
+                timeout=30,
+                max_retries=3,
+                headers=dict(self.session.headers)
+            )
             response.raise_for_status()
             
             data = response.json()
@@ -352,11 +359,17 @@ For complete filing details, view the original document on the SEC website.
             clean_cik = str(int(cik)).zfill(10)
             
             url = f"{self.submissions_base}/CIK{clean_cik}.json"
-            response = self.session.get(url, timeout=30)
+            response = make_request_with_retry(
+                url,
+                method='GET',
+                timeout=30,
+                max_retries=3,
+                headers=dict(self.session.headers)
+            )
             response.raise_for_status()
-            
+
             data = response.json()
-            
+
             return {
                 'name': data.get('name', company_info['name']),
                 'cik': clean_cik,
@@ -385,9 +398,15 @@ For complete filing details, view the original document on the SEC website.
             clean_cik = str(int(test_cik)).zfill(10)
             
             url = f"{self.submissions_base}/CIK{clean_cik}.json"
-            
+
             self._rate_limit()
-            response = self.session.get(url, timeout=30)
+            response = make_request_with_retry(
+                url,
+                method='GET',
+                timeout=30,
+                max_retries=3,
+                headers=dict(self.session.headers)
+            )
             response.raise_for_status()
             
             data = response.json()
