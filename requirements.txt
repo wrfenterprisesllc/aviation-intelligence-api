@@ -43,6 +43,9 @@ google-generativeai>=0.3.2
 # Security and rate limiting
 flask-limiter==3.5.0
 
+# Firebase Authentication
+firebase-admin>=6.2.0
+
 # API documentation
 flasgger>=0.9.7
 

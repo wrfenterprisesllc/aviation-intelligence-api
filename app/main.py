@@ -104,11 +104,19 @@ swagger_template = {
             "type": "apiKey",
             "in": "header",
             "name": "X-API-Key",
-            "description": "API key for authenticated endpoints"
+            "description": "API key for scheduled jobs and internal services"
+        },
+        "BearerAuth": {
+            "type": "apiKey",
+            "in": "header",
+            "name": "Authorization",
+            "description": "Firebase ID token. Format: Bearer <token>"
         }
     },
     "tags": [
         {"name": "Health", "description": "Health and status endpoints"},
+        {"name": "Users", "description": "User profile management"},
+        {"name": "Admin", "description": "Admin-only user management"},
         {"name": "Market Data", "description": "Live market data (TSA, FRED, fuel prices)"},
         {"name": "News", "description": "News article ingestion and management"},
         {"name": "Reports", "description": "AI-generated intelligence reports"},
@@ -117,7 +125,8 @@ swagger_template = {
         {"name": "Deals", "description": "Aircraft deal evaluation and pricing"},
         {"name": "Credit Scores", "description": "Airline credit scoring system"},
         {"name": "Backtesting", "description": "Credit model validation and backtesting"},
-        {"name": "Scheduler", "description": "Data ingestion and scheduled jobs"}
+        {"name": "Scheduler", "description": "Data ingestion and scheduled jobs"},
+        {"name": "Pipeline Monitoring", "description": "Data pipeline health and freshness"}
     ]
 }
 
@@ -5250,6 +5259,331 @@ def get_pipeline_details(pipeline_name):
             'pipeline_name': pipeline_name,
             'error': str(e)
         }), 500
+
+
+# ============================================================
+# User Management Endpoints (Firebase Auth)
+# ============================================================
+from app.utils.firebase_auth import require_auth, require_role, require_auth_or_api_key, get_current_user_uid
+from app.services import user_service
+
+
+@app.route('/api/users/me', methods=['GET'])
+@require_auth
+def get_current_user():
+    """
+    Get current authenticated user's profile.
+    ---
+    tags:
+      - Users
+    security:
+      - BearerAuth: []
+    responses:
+      200:
+        description: User profile
+      401:
+        description: Not authenticated
+    """
+    from flask import g
+
+    uid = g.firebase_uid
+    email = g.firebase_email
+    name = g.firebase_name
+
+    # Get or create user profile
+    user = user_service.get_or_create_user(uid, email, name)
+
+    return jsonify({
+        'success': True,
+        'user': {
+            'uid': user.get('uid'),
+            'email': user.get('email'),
+            'display_name': user.get('display_name'),
+            'picture': user.get('picture'),
+            'company': user.get('company'),
+            'role': user.get('role'),
+            'status': user.get('status'),
+            'created_at': user.get('created_at').isoformat() if user.get('created_at') else None,
+            'last_login': user.get('last_login').isoformat() if user.get('last_login') else None,
+            'usage': user.get('usage'),
+            'preferences': user.get('preferences')
+        }
+    })
+
+
+@app.route('/api/users/me', methods=['PATCH'])
+@require_auth
+def update_current_user():
+    """
+    Update current user's profile.
+
+    Allowed fields: display_name, company, preferences
+    ---
+    tags:
+      - Users
+    security:
+      - BearerAuth: []
+    parameters:
+      - name: body
+        in: body
+        schema:
+          type: object
+          properties:
+            display_name:
+              type: string
+            company:
+              type: string
+            preferences:
+              type: object
+    responses:
+      200:
+        description: Updated user profile
+      401:
+        description: Not authenticated
+    """
+    from flask import g
+
+    uid = g.firebase_uid
+    data = request.get_json() or {}
+
+    # Only allow specific fields to be updated
+    allowed_fields = ['display_name', 'company', 'preferences']
+    update_data = {k: v for k, v in data.items() if k in allowed_fields}
+
+    user = user_service.update_user_profile(
+        uid,
+        display_name=update_data.get('display_name'),
+        company=update_data.get('company'),
+        preferences=update_data.get('preferences')
+    )
+
+    if not user:
+        return jsonify({
+            'success': False,
+            'error': 'Failed to update profile'
+        }), 500
+
+    return jsonify({
+        'success': True,
+        'user': {
+            'uid': user.get('uid'),
+            'email': user.get('email'),
+            'display_name': user.get('display_name'),
+            'company': user.get('company'),
+            'role': user.get('role'),
+            'preferences': user.get('preferences')
+        }
+    })
+
+
+@app.route('/api/admin/users', methods=['GET'])
+@require_auth
+@require_role('admin')
+def list_all_users():
+    """
+    List all users (admin only).
+    ---
+    tags:
+      - Admin
+    security:
+      - BearerAuth: []
+    parameters:
+      - name: limit
+        in: query
+        type: integer
+        default: 50
+      - name: offset
+        in: query
+        type: integer
+        default: 0
+      - name: role
+        in: query
+        type: string
+        enum: [viewer, analyst, admin]
+      - name: status
+        in: query
+        type: string
+        enum: [active, disabled]
+    responses:
+      200:
+        description: List of users
+      403:
+        description: Insufficient permissions
+    """
+    limit = request.args.get('limit', 50, type=int)
+    offset = request.args.get('offset', 0, type=int)
+    role = request.args.get('role')
+    status = request.args.get('status')
+
+    users = user_service.list_users(
+        limit=min(limit, 100),  # Cap at 100
+        offset=offset,
+        role=role,
+        status=status
+    )
+
+    total = user_service.get_user_count()
+
+    return jsonify({
+        'success': True,
+        'users': [{
+            'uid': u.get('uid'),
+            'email': u.get('email'),
+            'display_name': u.get('display_name'),
+            'company': u.get('company'),
+            'role': u.get('role'),
+            'status': u.get('status'),
+            'created_at': u.get('created_at').isoformat() if u.get('created_at') else None,
+            'last_login': u.get('last_login').isoformat() if u.get('last_login') else None
+        } for u in users],
+        'total': total,
+        'limit': limit,
+        'offset': offset
+    })
+
+
+@app.route('/api/admin/users/<uid>/role', methods=['PATCH'])
+@require_auth
+@require_role('admin')
+def update_user_role(uid):
+    """
+    Change a user's role (admin only).
+    ---
+    tags:
+      - Admin
+    security:
+      - BearerAuth: []
+    parameters:
+      - name: uid
+        in: path
+        type: string
+        required: true
+      - name: body
+        in: body
+        schema:
+          type: object
+          required:
+            - role
+          properties:
+            role:
+              type: string
+              enum: [viewer, analyst, admin]
+    responses:
+      200:
+        description: Updated user
+      400:
+        description: Invalid role
+      403:
+        description: Insufficient permissions
+      404:
+        description: User not found
+    """
+    from flask import g
+
+    data = request.get_json() or {}
+    new_role = data.get('role')
+
+    if not new_role or new_role not in ['viewer', 'analyst', 'admin']:
+        return jsonify({
+            'success': False,
+            'error': 'Invalid role. Must be: viewer, analyst, or admin'
+        }), 400
+
+    # Prevent self-demotion from admin
+    if uid == g.firebase_uid and new_role != 'admin':
+        return jsonify({
+            'success': False,
+            'error': 'Cannot demote yourself from admin'
+        }), 400
+
+    user = user_service.update_user_role(uid, new_role, g.firebase_uid)
+
+    if not user:
+        return jsonify({
+            'success': False,
+            'error': 'User not found or update failed'
+        }), 404
+
+    return jsonify({
+        'success': True,
+        'user': {
+            'uid': user.get('uid'),
+            'email': user.get('email'),
+            'role': user.get('role')
+        }
+    })
+
+
+@app.route('/api/admin/users/<uid>/status', methods=['PATCH'])
+@require_auth
+@require_role('admin')
+def update_user_status(uid):
+    """
+    Enable or disable a user (admin only).
+    ---
+    tags:
+      - Admin
+    security:
+      - BearerAuth: []
+    parameters:
+      - name: uid
+        in: path
+        type: string
+        required: true
+      - name: body
+        in: body
+        schema:
+          type: object
+          required:
+            - status
+          properties:
+            status:
+              type: string
+              enum: [active, disabled]
+    responses:
+      200:
+        description: Updated user
+      400:
+        description: Invalid status
+      403:
+        description: Insufficient permissions
+      404:
+        description: User not found
+    """
+    from flask import g
+
+    data = request.get_json() or {}
+    new_status = data.get('status')
+
+    if not new_status or new_status not in ['active', 'disabled']:
+        return jsonify({
+            'success': False,
+            'error': 'Invalid status. Must be: active or disabled'
+        }), 400
+
+    # Prevent self-disable
+    if uid == g.firebase_uid:
+        return jsonify({
+            'success': False,
+            'error': 'Cannot disable yourself'
+        }), 400
+
+    user = user_service.update_user_status(uid, new_status, g.firebase_uid)
+
+    if not user:
+        return jsonify({
+            'success': False,
+            'error': 'User not found or update failed'
+        }), 404
+
+    return jsonify({
+        'success': True,
+        'user': {
+            'uid': user.get('uid'),
+            'email': user.get('email'),
+            'status': user.get('status')
+        }
+    })
 
 
 # ============================================================
