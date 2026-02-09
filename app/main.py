@@ -34,6 +34,8 @@ CORS(app, resources={
         "origins": [
             "https://ai.wrfenterprisesllc.com",
             "https://aviation-intelligence-rmexsuffdq-uc.a.run.app",
+            "https://ai-projects-485420.uc.r.appspot.com",
+            "https://aviation-intelligence.wl.r.appspot.com",
             re.compile(r"^http://localhost(:\d+)?$"),
             re.compile(r"^http://127\.0\.0\.1(:\d+)?$")
         ],
