@@ -2263,10 +2263,10 @@ Catalysts:"""
             if not latest:
                 return None
 
-            # Check if cache is still valid using valid_until timestamp
-            valid_until = latest.get('valid_until')
-            if valid_until:
-                if datetime.now() < valid_until:
+            # Check if cache is still valid using cached_until timestamp
+            cached_until = latest.get('cached_until')
+            if cached_until:
+                if datetime.now() < cached_until:
                     return latest.get('data', {})
 
             return None
@@ -2289,7 +2289,7 @@ Catalysts:"""
                 'timeframe': insight_type,
                 'data': data,
                 'generated_at': datetime.now(),
-                'valid_until': datetime.now() + timedelta(days=cache_days)
+                'cached_until': datetime.now() + timedelta(days=cache_days)
             }
 
             self.db.save_insight(insight_data)
