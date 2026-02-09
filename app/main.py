@@ -8,6 +8,8 @@ import os
 import json
 import logging
 import re
+import threading
+import uuid
 from datetime import datetime, timedelta
 from flask import Flask, jsonify, request, send_file
 from io import BytesIO
@@ -17,6 +19,10 @@ from app.utils.auth import require_api_key
 from app.utils.errors import register_error_handlers
 from app.utils.rate_limits import limiter, RATE_TIERS
 from app.utils.pipeline_tracker import PipelineTracker
+
+# Background job tracking
+_background_jobs = {}
+_background_jobs_lock = threading.Lock()
 
 app = Flask(__name__)
 
@@ -4701,12 +4707,223 @@ def _get_demo_validation_report():
     }
 
 
+def _run_report_generation_background(job_id: str, start_year: int, end_year: int, quick_mode: bool):
+    """Background thread function to generate validation report."""
+    global _background_jobs
+
+    try:
+        logger.info(f"🚀 Background job {job_id}: Starting report generation...")
+
+        with _background_jobs_lock:
+            _background_jobs[job_id]['status'] = 'running'
+            _background_jobs[job_id]['started_at'] = datetime.now().isoformat()
+
+        # Generate the report
+        report = backtest_report.generate_validation_report(
+            run_fresh=True,
+            start_year=start_year,
+            end_year=end_year
+        )
+
+        # Get text summary
+        summary_text = backtest_report.get_report_summary(report)
+
+        # Store result
+        with _background_jobs_lock:
+            _background_jobs[job_id]['status'] = 'completed'
+            _background_jobs[job_id]['completed_at'] = datetime.now().isoformat()
+            _background_jobs[job_id]['result'] = {
+                'success': True,
+                'report_id': report.get('report_id'),
+                'executive_summary': report.get('executive_summary'),
+                'key_findings': report.get('key_findings'),
+                'validation_cases': report.get('validation_cases'),
+                'weight_calibration': report.get('weight_calibration'),
+                'airline_profiles': report.get('airline_profiles'),
+                'limitations': report.get('limitations'),
+                'full_results': report.get('full_results'),
+                'report_metadata': report.get('report_metadata'),
+                'summary_text': summary_text
+            }
+
+        logger.info(f"✅ Background job {job_id}: Report generation completed!")
+
+    except Exception as e:
+        logger.error(f"❌ Background job {job_id}: Error - {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+
+        with _background_jobs_lock:
+            _background_jobs[job_id]['status'] = 'failed'
+            _background_jobs[job_id]['completed_at'] = datetime.now().isoformat()
+            _background_jobs[job_id]['error'] = str(e)
+
+
+@app.route('/api/credit-scores/backtest/report/start', methods=['POST'])
+@require_api_key
+def start_backtest_report():
+    """
+    Start generating a validation report in the background.
+    Returns immediately with a job_id to poll for status.
+    Only one report can be generated at a time.
+
+    Body (optional):
+        - start_year: Start year (default 2022)
+        - end_year: End year
+        - quick: If true, use quick mode (default true)
+
+    Returns:
+        - job_id: ID to poll for status
+        - status: 'started' or 'already_running'
+    """
+    global _background_jobs
+
+    try:
+        if not backtest_report:
+            return jsonify({
+                'success': False,
+                'error': 'Backtest report service not available'
+            }), 503
+
+        # Check if a job is already running
+        with _background_jobs_lock:
+            for job_id, job in _background_jobs.items():
+                if job.get('status') == 'running':
+                    return jsonify({
+                        'success': True,
+                        'status': 'already_running',
+                        'job_id': job_id,
+                        'message': 'A report is already being generated. Please wait for it to complete.',
+                        'started_at': job.get('started_at')
+                    })
+
+        data = request.get_json() or {}
+        quick_mode = data.get('quick', True)
+        start_year = data.get('start_year', 2022 if quick_mode else 2015)
+        end_year = data.get('end_year')
+
+        # Create new job
+        job_id = f"report_{uuid.uuid4().hex[:8]}"
+
+        with _background_jobs_lock:
+            _background_jobs[job_id] = {
+                'job_id': job_id,
+                'type': 'validation_report',
+                'status': 'pending',
+                'created_at': datetime.now().isoformat(),
+                'config': {
+                    'start_year': start_year,
+                    'end_year': end_year,
+                    'quick_mode': quick_mode
+                }
+            }
+
+        # Start background thread
+        thread = threading.Thread(
+            target=_run_report_generation_background,
+            args=(job_id, start_year, end_year, quick_mode),
+            daemon=True
+        )
+        thread.start()
+
+        logger.info(f"📊 Started background report generation job: {job_id}")
+
+        return jsonify({
+            'success': True,
+            'status': 'started',
+            'job_id': job_id,
+            'message': 'Report generation started. Poll /api/credit-scores/backtest/report/status/{job_id} for progress.',
+            'estimated_time_minutes': 10 if quick_mode else 20
+        })
+
+    except Exception as e:
+        logger.error(f"❌ Error starting backtest report: {e}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+
+@app.route('/api/credit-scores/backtest/report/status/<job_id>', methods=['GET'])
+@require_api_key
+def get_backtest_report_status(job_id):
+    """
+    Get the status of a background report generation job.
+
+    Returns:
+        - status: 'pending', 'running', 'completed', or 'failed'
+        - result: The report data (if completed)
+        - error: Error message (if failed)
+    """
+    global _background_jobs
+
+    with _background_jobs_lock:
+        job = _background_jobs.get(job_id)
+
+    if not job:
+        return jsonify({
+            'success': False,
+            'error': 'Job not found',
+            'job_id': job_id
+        }), 404
+
+    response = {
+        'success': True,
+        'job_id': job_id,
+        'status': job.get('status'),
+        'created_at': job.get('created_at'),
+        'started_at': job.get('started_at'),
+        'completed_at': job.get('completed_at')
+    }
+
+    if job.get('status') == 'completed':
+        response['result'] = job.get('result')
+    elif job.get('status') == 'failed':
+        response['error'] = job.get('error')
+
+    return jsonify(response)
+
+
+@app.route('/api/credit-scores/backtest/report/status', methods=['GET'])
+@require_api_key
+def get_all_report_jobs_status():
+    """
+    Get status of all report generation jobs.
+    Useful for checking if any job is currently running.
+    """
+    global _background_jobs
+
+    with _background_jobs_lock:
+        jobs = []
+        for job_id, job in _background_jobs.items():
+            jobs.append({
+                'job_id': job_id,
+                'status': job.get('status'),
+                'created_at': job.get('created_at'),
+                'started_at': job.get('started_at'),
+                'completed_at': job.get('completed_at')
+            })
+
+    # Find currently running job
+    running_job = next((j for j in jobs if j['status'] == 'running'), None)
+
+    return jsonify({
+        'success': True,
+        'jobs': jobs,
+        'running_job': running_job,
+        'total_jobs': len(jobs)
+    })
+
+
 @app.route('/api/credit-scores/backtest/report', methods=['POST'])
 @require_api_key
 def generate_backtest_report():
     """
     Generate new comprehensive validation report.
     Runs backtest + optimization + validation + report generation.
+
+    NOTE: This is a synchronous endpoint that can take 10-15 minutes.
+    Consider using /api/credit-scores/backtest/report/start for background processing.
 
     Body (optional):
         - start_year: Start year (default 2015)
