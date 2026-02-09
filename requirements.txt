@@ -24,6 +24,7 @@ scipy>=1.11.0
 
 # Production server
 gunicorn==21.2.0
+gevent==24.2.1
 
 # Utilities
 python-dotenv==1.0.0

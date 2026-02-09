@@ -31,6 +31,6 @@ EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
   CMD curl -f http://localhost:8080/health || exit 1
 
-# Start application with gunicorn optimized for Cloud Run
-# Timeout set to 900s to match Cloud Run timeout for long-running operations (backtest, optimization)
-CMD exec gunicorn --bind :$PORT --workers 1 --timeout 900 --keep-alive 2 --max-requests 1000 app.main:app
+# Start application with gunicorn + gevent workers for long-running requests
+# Timeout set to 900s to match Cloud Run timeout for backtest/optimization operations
+CMD exec gunicorn --bind :$PORT --workers 1 --worker-class gevent --timeout 900 --keep-alive 2 --max-requests 1000 app.main:app
