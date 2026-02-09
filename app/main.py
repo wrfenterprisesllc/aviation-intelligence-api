@@ -933,7 +933,7 @@ def get_single_article(article_id):
         }), 500
 
 @app.route('/api/news/enhance/<article_id>', methods=['POST'])
-@require_api_key
+@require_auth
 def enhance_article(article_id):
     """
     Enhance a news article with AI-generated summary and impact statement
@@ -998,7 +998,7 @@ def enhance_article(article_id):
 
 
 @app.route('/api/news/enhance-batch', methods=['POST'])
-@require_api_key
+@require_auth
 def enhance_articles_batch():
     """
     Enhance multiple articles with AI summaries and impact statements
@@ -1066,7 +1066,8 @@ def enhance_articles_batch():
 
 
 @app.route('/api/news/clean-html', methods=['POST'])
-@require_api_key
+@require_auth
+@require_role('admin')
 def clean_article_html():
     """
     Clean HTML markup from article content and summaries
@@ -1442,7 +1443,7 @@ def get_fred_historical():
 # ========== AI INSIGHTS ENDPOINTS ==========
 
 @app.route('/api/reports/generate', methods=['POST'])
-@require_api_key
+@require_auth
 def generate_report():
     """
     Generate an airline or industry sector report using AI
@@ -2718,6 +2719,7 @@ def get_credit_rating(airline_name: str):
 # ============================================================================
 
 @app.route('/api/ingest/financial-data', methods=['POST'])
+@require_api_key
 def ingest_financial_data():
     """
     Daily ingestion of all financial data sources
@@ -2880,6 +2882,7 @@ def ingest_financial_data():
 
 
 @app.route('/api/ingest/status', methods=['GET'])
+@require_auth_or_api_key
 def get_ingestion_status():
     """
     Check the status of pre-loaded financial data
@@ -3078,6 +3081,7 @@ def get_defense_contracts_summary():
 
 
 @app.route('/api/ingest/defense-contracts', methods=['POST'])
+@require_api_key
 def ingest_defense_contracts():
     """
     Ingest defense contracts from defense.gov
@@ -3324,7 +3328,7 @@ def get_lessee_profile(name):
 
 
 @app.route('/api/deals/evaluate', methods=['POST'])
-@require_api_key
+@require_auth
 def evaluate_deal():
     """
     Evaluate a deal - calculate IRR, NPV, verdict, sensitivity.
@@ -3432,7 +3436,7 @@ def evaluate_deal():
 
 
 @app.route('/api/deals/price', methods=['POST'])
-@require_api_key
+@require_auth
 def price_deal():
     """
     Price a deal - solve for max purchase price given target IRR.
@@ -3540,7 +3544,7 @@ def price_deal():
 
 
 @app.route('/api/deals/evaluate/pdf', methods=['POST'])
-@require_api_key
+@require_auth
 def evaluate_deal_pdf():
     """
     Evaluate a deal and return PDF instead of JSON.
@@ -3628,7 +3632,7 @@ def evaluate_deal_pdf():
 
 
 @app.route('/api/deals/price/pdf', methods=['POST'])
-@require_api_key
+@require_auth
 def price_deal_pdf():
     """
     Price a deal and return PDF instead of JSON.
@@ -3773,7 +3777,8 @@ def get_deal_history():
 
 
 @app.route('/api/deals/seed-defaults', methods=['POST'])
-@require_api_key
+@require_auth
+@require_role('admin')
 def seed_aircraft_defaults():
     """
     Admin endpoint: Seed aircraft defaults to database.
@@ -3812,7 +3817,7 @@ def seed_aircraft_defaults():
 
 
 @app.route('/api/deals/save', methods=['POST'])
-@require_api_key
+@require_auth
 def save_deal_evaluation():
     """
     Save a deal evaluation to history.
@@ -3977,7 +3982,8 @@ def get_credit_score(code):
 
 
 @app.route('/api/credit-scores/<code>/refresh', methods=['POST'])
-@require_api_key
+@require_auth
+@require_role('admin')
 def refresh_credit_score(code):
     """
     Trigger rescore for a single airline.
@@ -4134,7 +4140,7 @@ def get_credit_score_history(code):
 
 
 @app.route('/api/deal-evaluator-overrides', methods=['POST'])
-@require_api_key
+@require_auth
 def log_deal_evaluator_override():
     """
     Log when user overrides hurdle rate from credit score default.
@@ -4181,7 +4187,8 @@ def log_deal_evaluator_override():
 
 
 @app.route('/api/credit-scores/seed-ratings', methods=['POST'])
-@require_api_key
+@require_auth
+@require_role('admin')
 def seed_credit_ratings():
     """
     Seed initial published credit ratings for all airlines.
@@ -4323,7 +4330,8 @@ def seed_credit_ratings():
 # ========== BACKTESTING ENDPOINTS ==========
 
 @app.route('/api/credit-scores/backtest/collect-data', methods=['POST'])
-@require_api_key
+@require_auth
+@require_role('admin')
 @limiter.limit(RATE_TIERS['heavy'])
 def collect_backtest_data():
     """
@@ -4384,7 +4392,8 @@ def collect_backtest_data():
 
 
 @app.route('/api/credit-scores/backtest/run', methods=['POST'])
-@require_api_key
+@require_auth
+@require_role('admin')
 @limiter.limit(RATE_TIERS['heavy'])
 def run_backtest():
     """
@@ -4469,7 +4478,8 @@ def run_backtest():
 
 
 @app.route('/api/credit-scores/backtest/optimize', methods=['POST'])
-@require_api_key
+@require_auth
+@require_role('admin')
 def optimize_weights():
     """
     Run weight optimization via grid search.
@@ -4536,7 +4546,8 @@ def optimize_weights():
 
 
 @app.route('/api/credit-scores/backtest/validate', methods=['POST'])
-@require_api_key
+@require_auth
+@require_role('admin')
 def run_validation():
     """
     Run validation suite with named test cases.
@@ -4590,7 +4601,8 @@ def run_validation():
 
 
 @app.route('/api/credit-scores/backtest/report', methods=['GET'])
-@require_api_key
+@require_auth
+@require_role('admin')
 def get_backtest_report():
     """
     Get the most recent comprehensive validation report.
@@ -4772,7 +4784,8 @@ def _run_report_generation_background(job_id: str, start_year: int, end_year: in
 
 
 @app.route('/api/credit-scores/backtest/report/start', methods=['POST'])
-@require_api_key
+@require_auth
+@require_role('admin')
 def start_backtest_report():
     """
     Start generating a validation report in the background.
@@ -4857,7 +4870,8 @@ def start_backtest_report():
 
 
 @app.route('/api/credit-scores/backtest/report/status/<job_id>', methods=['GET'])
-@require_api_key
+@require_auth
+@require_role('admin')
 def get_backtest_report_status(job_id):
     """
     Get the status of a background report generation job.
@@ -4897,7 +4911,8 @@ def get_backtest_report_status(job_id):
 
 
 @app.route('/api/credit-scores/backtest/report/status', methods=['GET'])
-@require_api_key
+@require_auth
+@require_role('admin')
 def get_all_report_jobs_status():
     """
     Get status of all report generation jobs.
@@ -4928,7 +4943,8 @@ def get_all_report_jobs_status():
 
 
 @app.route('/api/credit-scores/backtest/report', methods=['POST'])
-@require_api_key
+@require_auth
+@require_role('admin')
 def generate_backtest_report():
     """
     Generate new comprehensive validation report.
@@ -5007,7 +5023,8 @@ def generate_backtest_report():
 
 
 @app.route('/api/credit-scores/backtest/<code>', methods=['GET'])
-@require_api_key
+@require_auth
+@require_role('admin')
 def get_historical_score(code):
     """
     Get historical score for a specific airline at a specific date.
@@ -5124,7 +5141,7 @@ def get_pipelines_status():
 
 
 @app.route('/api/pipelines/runs', methods=['GET'])
-@require_api_key
+@require_auth_or_api_key
 def get_pipeline_runs():
     """
     Get recent pipeline runs.
@@ -5171,7 +5188,7 @@ def get_pipeline_runs():
 
 
 @app.route('/api/pipelines/check-freshness', methods=['POST'])
-@require_api_key
+@require_auth_or_api_key
 def check_and_alert_freshness():
     """
     Check freshness and send alerts for stale pipelines.
@@ -5216,7 +5233,7 @@ def check_and_alert_freshness():
 
 
 @app.route('/api/pipelines/<pipeline_name>', methods=['GET'])
-@require_api_key
+@require_auth_or_api_key
 def get_pipeline_details(pipeline_name):
     """
     Get detailed status for a specific pipeline.
