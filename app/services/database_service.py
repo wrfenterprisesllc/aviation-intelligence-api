@@ -541,33 +541,41 @@ class DatabaseService:
         Get the most recent cached insight for a timeframe
 
         Args:
-            timeframe: 'daily', 'weekly', or 'monthly'
+            timeframe: 'daily', 'weekly', or 'monthly' (or specific types like 'investment_themes')
 
         Returns:
-            Insight dictionary or None if not found
+            Insight dictionary or None if not found/expired
         """
         try:
+            # Simple query - just filter by timeframe
+            # Firestore composite index not required this way
             query = (self.db.collection('insights')
                     .where(filter=FieldFilter('timeframe', '==', timeframe))
-                    .where(filter=FieldFilter('cached_until', '>', datetime.now()))
                     .order_by('generated_at', direction=firestore.Query.DESCENDING)
                     .limit(1))
 
             docs = list(query.stream())
 
-            if docs:
-                insight_data = docs[0].to_dict()
-                insight_data['id'] = docs[0].id
+            if not docs:
+                self.logger.info(f"No cached {timeframe} insight found")
+                return None
 
-                # Convert timestamps
-                if 'generated_at' in insight_data and hasattr(insight_data['generated_at'], 'timestamp'):
-                    insight_data['generated_at'] = insight_data['generated_at'].replace(tzinfo=None)
-                if 'cached_until' in insight_data and hasattr(insight_data['cached_until'], 'timestamp'):
-                    insight_data['cached_until'] = insight_data['cached_until'].replace(tzinfo=None)
+            insight_data = docs[0].to_dict()
+            insight_data['id'] = docs[0].id
 
+            # Convert timestamps
+            if 'generated_at' in insight_data and hasattr(insight_data['generated_at'], 'timestamp'):
+                insight_data['generated_at'] = insight_data['generated_at'].replace(tzinfo=None)
+            if 'cached_until' in insight_data and hasattr(insight_data['cached_until'], 'timestamp'):
+                insight_data['cached_until'] = insight_data['cached_until'].replace(tzinfo=None)
+
+            # Check if cache is still valid (do this in code instead of query)
+            cached_until = insight_data.get('cached_until')
+            if cached_until and datetime.now() < cached_until:
+                self.logger.info(f"Found valid cached {timeframe} insight")
                 return insight_data
             else:
-                self.logger.info(f"No cached {timeframe} insight found")
+                self.logger.info(f"Cached {timeframe} insight expired")
                 return None
 
         except Exception as e:
