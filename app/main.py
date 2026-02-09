@@ -759,9 +759,10 @@ def ingest_news():
                 sources_processed=stats['sources_processed']
             )
 
-            # Record any errors from stats
-            for error in stats.get('errors', []):
-                tracker.record_error("source", "ingestion_error", str(error))
+            # Record error count from stats
+            error_count = stats.get('errors', 0)
+            if error_count > 0:
+                tracker.record_error("source", "ingestion_error", f"{error_count} error(s) during ingestion")
 
             response_time = (datetime.now() - start_time).total_seconds() * 1000
 
