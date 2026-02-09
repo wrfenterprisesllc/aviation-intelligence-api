@@ -2308,6 +2308,134 @@ def get_catalysts():
             'timestamp': datetime.now().isoformat()
         }), 500
 
+
+# ============================================================
+# Weekly Outlook Pre-Generation (Scheduled Job)
+# ============================================================
+
+@app.route('/api/outlook/pre-generate', methods=['POST'])
+@require_api_key
+def pre_generate_weekly_outlook():
+    """
+    Pre-generate all Weekly Outlook AI content and cache in database.
+    Called by Cloud Scheduler after daily news ingestion completes.
+
+    This endpoint generates fresh content for:
+    - Executive Summary
+    - Investment Themes
+    - Strategic Recommendations
+    - Catalysts
+
+    All content is cached in Firestore for instant retrieval by the frontend.
+    ---
+    tags:
+      - Weekly Outlook
+    security:
+      - ApiKeyAuth: []
+    responses:
+      200:
+        description: All content pre-generated successfully
+      500:
+        description: Pre-generation failed
+      503:
+        description: Insights service not available
+    """
+    start_time = datetime.now()
+
+    # Use PipelineTracker for monitoring
+    with PipelineTracker("outlook_pre_generation", trigger="api", db_service=db_service) as tracker:
+        results = {}
+
+        try:
+            if not insights_service:
+                tracker.record_error("pre_generation", "service_unavailable", "Insights service not available")
+                return jsonify({
+                    'success': False,
+                    'error': 'Insights service not available',
+                    'timestamp': datetime.now().isoformat()
+                }), 503
+
+            # 1. Generate Executive Summary (force fresh, bypass cache)
+            logger.info("📋 Pre-generating executive summary...")
+            try:
+                summary = insights_service.generate_executive_summary(use_cache=False)
+                results['executive_summary'] = 'success' if summary else 'failed'
+                if not summary:
+                    tracker.record_error("executive_summary", "generation_failed", "Gemini returned empty response")
+            except Exception as e:
+                results['executive_summary'] = 'failed'
+                tracker.record_error("executive_summary", "exception", str(e))
+                logger.error(f"❌ Executive summary generation failed: {e}")
+
+            # 2. Generate Investment Themes
+            logger.info("💡 Pre-generating investment themes...")
+            try:
+                themes = insights_service.generate_investment_themes(use_cache=False)
+                results['investment_themes'] = len(themes) if themes else 0
+                if not themes:
+                    tracker.record_error("investment_themes", "generation_failed", "Gemini returned empty response")
+            except Exception as e:
+                results['investment_themes'] = 0
+                tracker.record_error("investment_themes", "exception", str(e))
+                logger.error(f"❌ Investment themes generation failed: {e}")
+
+            # 3. Generate Strategic Recommendations
+            logger.info("📊 Pre-generating strategic recommendations...")
+            try:
+                recs = insights_service.generate_strategic_recommendations(use_cache=False)
+                results['recommendations'] = 'success' if recs else 'failed'
+                if not recs:
+                    tracker.record_error("recommendations", "generation_failed", "Gemini returned empty response")
+            except Exception as e:
+                results['recommendations'] = 'failed'
+                tracker.record_error("recommendations", "exception", str(e))
+                logger.error(f"❌ Strategic recommendations generation failed: {e}")
+
+            # 4. Generate Catalysts (longer cache - 7 days)
+            logger.info("📅 Pre-generating catalysts...")
+            try:
+                catalysts = insights_service.generate_catalysts(use_cache=False)
+                results['catalysts'] = len(catalysts) if catalysts else 0
+                if not catalysts:
+                    tracker.record_error("catalysts", "generation_failed", "Gemini returned empty response")
+            except Exception as e:
+                results['catalysts'] = 0
+                tracker.record_error("catalysts", "exception", str(e))
+                logger.error(f"❌ Catalysts generation failed: {e}")
+
+            response_time = (datetime.now() - start_time).total_seconds() * 1000
+
+            # Determine overall status
+            all_success = all(v not in ['failed', 0] for v in results.values())
+            partial_success = any(v not in ['failed', 0] for v in results.values())
+
+            tracker.set_summary(
+                sections_generated=4,
+                themes_count=results.get('investment_themes', 0),
+                catalysts_count=results.get('catalysts', 0),
+                status='success' if all_success else ('partial' if partial_success else 'failed')
+            )
+
+            logger.info(f"✅ Weekly outlook pre-generation completed: {results}")
+
+            return jsonify({
+                'success': all_success or partial_success,
+                'results': results,
+                'message': 'Weekly outlook content pre-generated and cached',
+                'timestamp': datetime.now().isoformat(),
+                'response_time_ms': round(response_time, 1)
+            }), 200
+
+        except Exception as e:
+            logger.error(f"❌ Weekly outlook pre-generation failed: {e}")
+            tracker.record_error("pre_generation", "exception", str(e))
+            return jsonify({
+                'success': False,
+                'error': str(e),
+                'timestamp': datetime.now().isoformat()
+            }), 500
+
+
 @app.route('/api/weekly-outlook/load-factor')
 def get_industry_load_factor():
     """Get industry-wide load factor data"""
