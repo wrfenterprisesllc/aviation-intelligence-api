@@ -16,6 +16,7 @@ from io import BytesIO
 from flask_cors import CORS
 from flasgger import Swagger
 from app.utils.auth import require_api_key
+from app.utils.firebase_auth import require_auth, require_role, require_auth_or_api_key, get_current_user_uid
 from app.utils.errors import register_error_handlers
 from app.utils.rate_limits import limiter, RATE_TIERS
 from app.utils.pipeline_tracker import PipelineTracker
@@ -232,6 +233,9 @@ try:
 except Exception as e:
     logger.warning(f"⚠️ PDF service initialization failed: {e}")
     pdf_service = None
+
+# User Service (Firebase Auth)
+from app.services import user_service
 
 # Credit Scoring Services
 try:
@@ -5281,9 +5285,6 @@ def get_pipeline_details(pipeline_name):
 # ============================================================
 # User Management Endpoints (Firebase Auth)
 # ============================================================
-from app.utils.firebase_auth import require_auth, require_role, require_auth_or_api_key, get_current_user_uid
-from app.services import user_service
-
 
 @app.route('/api/users/me', methods=['GET'])
 @require_auth
