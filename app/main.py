@@ -5701,10 +5701,10 @@ def update_user_status(uid):
     data = request.get_json() or {}
     new_status = data.get('status')
 
-    if not new_status or new_status not in ['active', 'disabled']:
+    if not new_status or new_status not in ['active', 'disabled', 'pending']:
         return jsonify({
             'success': False,
-            'error': 'Invalid status. Must be: active or disabled'
+            'error': 'Invalid status. Must be: active, disabled, or pending'
         }), 400
 
     # Prevent self-disable

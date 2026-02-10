@@ -104,11 +104,14 @@ def get_or_create_user(
             update_user_login(uid)
             return existing_user
 
-        # Determine role based on ADMIN_EMAILS
+        # Determine role and status based on ADMIN_EMAILS
         admin_emails = os.getenv('ADMIN_EMAILS', '').split(',')
         admin_emails = [e.strip().lower() for e in admin_emails if e.strip()]
 
-        role = 'admin' if email.lower() in admin_emails else 'viewer'
+        is_admin = email.lower() in admin_emails
+        role = 'admin' if is_admin else 'viewer'
+        # Admins are auto-approved, others require admin approval
+        status = 'active' if is_admin else 'pending'
 
         # Create new user
         user_data = {
@@ -117,7 +120,7 @@ def get_or_create_user(
             'picture': picture,
             'company': None,
             'role': role,
-            'status': 'active',
+            'status': status,
             'created_at': datetime.utcnow(),
             'last_login': datetime.utcnow(),
             'usage': {
@@ -250,17 +253,17 @@ def update_user_role(uid: str, new_role: str, admin_uid: str) -> Optional[Dict[s
 
 def update_user_status(uid: str, status: str, admin_uid: str) -> Optional[Dict[str, Any]]:
     """
-    Enable or disable a user (admin only).
+    Update a user's status (admin only).
 
     Args:
         uid: Target user's Firebase UID
-        status: 'active' or 'disabled'
+        status: 'active', 'disabled', or 'pending'
         admin_uid: UID of admin making the change
 
     Returns:
         Updated user dictionary or None on error
     """
-    if status not in ['active', 'disabled']:
+    if status not in ['active', 'disabled', 'pending']:
         logger.error(f"Invalid status: {status}")
         return None
 

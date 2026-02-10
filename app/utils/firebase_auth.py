@@ -81,6 +81,28 @@ def require_auth(f):
 
             logger.debug(f"Authenticated user: {g.firebase_email} ({g.firebase_uid})")
 
+            # Check user status in database
+            from app.services.user_service import get_user_by_uid
+            user = get_user_by_uid(g.firebase_uid)
+            if user:
+                status = user.get('status', 'active')
+                if status == 'pending':
+                    logger.warning(f"Pending user attempted access: {g.firebase_email}")
+                    return jsonify({
+                        "error": "account_pending",
+                        "message": "Your account is pending approval. An administrator will review your request."
+                    }), 403
+                elif status == 'disabled':
+                    logger.warning(f"Disabled user attempted access: {g.firebase_email}")
+                    return jsonify({
+                        "error": "account_disabled",
+                        "message": "Your account has been disabled. Please contact an administrator."
+                    }), 403
+
+                # Store user info for downstream use
+                g.user = user
+                g.user_status = status
+
         except firebase_auth.InvalidIdTokenError as e:
             logger.warning(f"Invalid Firebase token: {e}")
             return jsonify({
@@ -190,6 +212,27 @@ def require_auth_or_api_key(f):
                 g.firebase_name = decoded.get("name")
                 g.auth_type = "user"
                 logger.debug(f"Authenticated via Firebase: {g.firebase_email}")
+
+                # Check user status in database (for user auth only, not API key)
+                from app.services.user_service import get_user_by_uid
+                user = get_user_by_uid(g.firebase_uid)
+                if user:
+                    status = user.get('status', 'active')
+                    if status == 'pending':
+                        logger.warning(f"Pending user attempted access: {g.firebase_email}")
+                        return jsonify({
+                            "error": "account_pending",
+                            "message": "Your account is pending approval. An administrator will review your request."
+                        }), 403
+                    elif status == 'disabled':
+                        logger.warning(f"Disabled user attempted access: {g.firebase_email}")
+                        return jsonify({
+                            "error": "account_disabled",
+                            "message": "Your account has been disabled. Please contact an administrator."
+                        }), 403
+                    g.user = user
+                    g.user_status = status
+
                 return f(*args, **kwargs)
             except Exception as e:
                 logger.debug(f"Firebase token invalid, trying API key: {e}")
