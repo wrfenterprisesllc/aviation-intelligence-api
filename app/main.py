@@ -40,7 +40,7 @@ CORS(app, resources={
             re.compile(r"^http://localhost(:\d+)?$"),
             re.compile(r"^http://127\.0\.0\.1(:\d+)?$")
         ],
-        "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+        "methods": ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
         "allow_headers": ["Content-Type", "X-API-Key", "Authorization"],
         "expose_headers": [
             "X-API-Key",
