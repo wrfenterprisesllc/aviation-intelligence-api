@@ -547,14 +547,29 @@ class DatabaseService:
             Insight dictionary or None if not found/expired
         """
         try:
-            # Simple query - just filter by timeframe
-            # Firestore composite index not required this way
+            # Get ALL insights of this type (no limit, no ordering to avoid index requirement)
+            # Sort in code instead - insights collection is small so this is fine
             query = (self.db.collection('insights')
-                    .where(filter=FieldFilter('timeframe', '==', timeframe))
-                    .order_by('generated_at', direction=firestore.Query.DESCENDING)
-                    .limit(1))
+                    .where(filter=FieldFilter('timeframe', '==', timeframe)))
 
             docs = list(query.stream())
+            self.logger.info(f"📊 Found {len(docs)} insight documents for timeframe={timeframe}")
+
+            # Sort by generated_at in code (descending) to get most recent
+            # Convert Firestore timestamps to comparable datetime for sorting
+            def get_sort_key(doc):
+                ts = doc.to_dict().get('generated_at')
+                if isinstance(ts, datetime):
+                    return ts.replace(tzinfo=None) if ts.tzinfo else ts
+                elif hasattr(ts, 'timestamp'):
+                    return datetime.fromtimestamp(ts.timestamp())
+                return datetime.min
+
+            if len(docs) > 1:
+                docs = sorted(docs, key=get_sort_key, reverse=True)
+                # Log the top document for debugging
+                data = docs[0].to_dict()
+                self.logger.info(f"  Most recent: id={docs[0].id}, has_cached_until={('cached_until' in data)}")
 
             if not docs:
                 self.logger.info(f"No cached {timeframe} insight found")
@@ -563,14 +578,22 @@ class DatabaseService:
             insight_data = docs[0].to_dict()
             insight_data['id'] = docs[0].id
 
-            # Convert timestamps
-            if 'generated_at' in insight_data and hasattr(insight_data['generated_at'], 'timestamp'):
-                insight_data['generated_at'] = insight_data['generated_at'].replace(tzinfo=None)
-            if 'cached_until' in insight_data and hasattr(insight_data['cached_until'], 'timestamp'):
-                insight_data['cached_until'] = insight_data['cached_until'].replace(tzinfo=None)
+            # Convert Firestore timestamps to datetime
+            for ts_field in ['generated_at', 'cached_until']:
+                if ts_field in insight_data:
+                    ts_val = insight_data[ts_field]
+                    self.logger.info(f"Converting {ts_field}: type={type(ts_val)}, value={ts_val}")
+                    # Firestore returns DatetimeWithNanoseconds which is a subclass of datetime
+                    if isinstance(ts_val, datetime):
+                        # Already a datetime - just strip timezone if present
+                        insight_data[ts_field] = ts_val.replace(tzinfo=None) if ts_val.tzinfo else ts_val
+                    elif hasattr(ts_val, 'timestamp'):
+                        # Has timestamp() method - convert
+                        insight_data[ts_field] = datetime.fromtimestamp(ts_val.timestamp())
 
             # Check if cache is still valid (do this in code instead of query)
             cached_until = insight_data.get('cached_until')
+            self.logger.info(f"Cache check: cached_until={cached_until}, now={datetime.now()}")
             if cached_until and datetime.now() < cached_until:
                 self.logger.info(f"Found valid cached {timeframe} insight")
                 return insight_data

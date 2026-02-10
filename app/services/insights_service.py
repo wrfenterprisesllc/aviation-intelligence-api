@@ -2111,9 +2111,11 @@ Catalysts:"""
                 limit=3
             )
 
-            # Extract risk summaries
-            op_risks = [r.get('impact_statement', r.get('title', '')) for r in operational_risks]
-            fin_risks = [r.get('impact_statement', r.get('title', '')) for r in financial_risks]
+            # Extract risk summaries (filter out None/empty values)
+            op_risks = [r.get('impact_statement') or r.get('title') or '' for r in operational_risks]
+            op_risks = [r for r in op_risks if r]  # Remove empty strings
+            fin_risks = [r.get('impact_statement') or r.get('title') or '' for r in financial_risks]
+            fin_risks = [r for r in fin_risks if r]  # Remove empty strings
 
             # NEW: Get TSA summary
             tsa_summary = None
