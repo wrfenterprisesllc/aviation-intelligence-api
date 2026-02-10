@@ -1724,7 +1724,7 @@ def list_reports():
         }), 500
 
 @app.route('/api/newsletter/generate', methods=['POST'])
-@require_api_key
+@require_auth_or_api_key
 def generate_newsletter():
     """
     Generate a weekly newsletter
